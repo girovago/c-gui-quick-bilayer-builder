@@ -52,7 +52,12 @@
     waterRepr = null;
     state = "loading";
     try {
-      const comp = await stage.loadFile(url, { defaultRepresentation: false });
+      // /api/sample/pdb non ha estensione nell'URL: NGL deduce il formato
+      // dall'ultima parte del path → serve dichiararlo, altrimenti errore
+      const comp = await stage.loadFile(url, {
+        defaultRepresentation: false,
+        ...(url === SAMPLE ? { ext: "pdb" } : {}),
+      });
       if (key !== lastRequested) return; // sistema cambiato durante l'await: scarta
       decorate(comp);
       state = "ready";
