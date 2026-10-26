@@ -16,6 +16,7 @@ Ultimo aggiornamento delle verifiche: **24–26 ottobre 2026**.
 | `GET /api/check_status` senza token risponde **401** `{"error":"No token provided"}` con `Content-Type: text/html` | chiamata diretta |
 | `POST /api/quick_bilayer` senza `run_ffconverter=true` restituisce `"modules": "membuilder"` e **nessun input GROMACS** | submit reale, job `9285768142` |
 | `check_status` espone anche `rank` ("N job(s) ahead"), `rqinfo`, `hasTarFile`, `lastInpStep`: coda e avanzamento sono leggibili | job reale in coda (19 job davanti) |
+| Token scaduto/malformato → **403** `{"error":"Invalid token","detail":"Expired token"}` (non 401), `Content-Type: text/html` | chiamata diretta con token vecchio |
 | L'archivio scaricato ha una **coda ASCII** (lunghezza compressa) dopo lo stream gzip | ispezione del file scaricato |
 | La coda Redis del server è condivisa: 20 job in coda anche per una membrana 64+64 | `rqinfo` |
 

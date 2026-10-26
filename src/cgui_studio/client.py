@@ -6,6 +6,9 @@ Comportamenti derivati da verifiche reali (vedi SOURCES.md), non da assunzioni:
   ``No user or incorrect password!`` (non 401, non JSON);
 * una richiesta senza token risponde **401** con ``{"error":"No token provided"}``
   ma ``Content-Type: text/html``: non ci si può fidare del MIME;
+* un token scaduto o malformato risponde **403** ``{"error":"Invalid token",
+  "detail":"Expired token" | "Wrong number of segments"}``: va distinto dal 401,
+  e non ha senso ritentarlo;
 * il token JWT scade in circa un'ora: il client non lo rinnova da solo (servono
   le credenziali), ma ``cgui login`` lo rifà in due secondi;
 * l'archivio scaricato può avere **byte ASCII di lunghezza accodati** dopo lo

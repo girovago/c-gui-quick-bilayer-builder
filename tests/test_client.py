@@ -107,7 +107,7 @@ def test_submit_error_flag_raises_api_error():
         return _json({"submitted": False, "request": {}})
 
     with pytest.raises(ApiError, match="rifiutato"):
-        mock_client(handler).submit(leaflet_spec())
+        mock_client(handler, token="t").submit(leaflet_spec())
 
 
 # -------------------------------------------------------------------- status

@@ -11,7 +11,7 @@ from cgui_studio.models import Spec
 MOCK_BASE = "https://mock.test/api"
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("CGUI_STUDIO_HOME", str(tmp_path / "cguihome"))
     return tmp_path / "cguihome"
