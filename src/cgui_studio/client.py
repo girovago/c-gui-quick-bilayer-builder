@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -313,7 +313,7 @@ def fetch_job(
 
     manifest = {
         "tool": "cgui-studio",
-        "created": f"{stamp}T00:00:00Z",
+        "created": datetime.now(UTC).isoformat(timespec="seconds"),
         "jobid": jobid,
         "label": label,
         "spec": spec,

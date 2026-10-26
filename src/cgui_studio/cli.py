@@ -286,6 +286,27 @@ def status_cmd(
         raise typer.Exit(exit_code)
 
 
+@app.command("wait")
+@_guarded
+def wait_cmd(
+    ctx: typer.Context,
+    jobid: Annotated[str, typer.Argument(help="ID del job da attendere e scaricare")],
+    outdir: Annotated[
+        Path | None, typer.Option("--outdir", help="Cartella risultati (default: data/results)")
+    ] = None,
+    timeout: Annotated[float, typer.Option("--timeout", help="Massimo secondi di attesa")] = 3600,
+) -> None:
+    """Attende la fine di un job GIÀ inviato, poi scarica ed estrae (come build --wait)."""
+    dest = outdir or paths.default_results_dir()
+    with JobStore() as store:
+        rec = store.get_by_jobid(jobid)
+    with _client(require_token=True) as client:
+        result = _wait_and_fetch(
+            client, jobid, rec.label if rec else None, rec.spec_json if rec else None, dest
+        )
+    _print_fetch_summary(result)
+
+
 @app.command("fetch")
 @_guarded
 def fetch_cmd(
@@ -345,10 +366,10 @@ def doctor_cmd(ctx: typer.Context) -> None:
         nonlocal problems
         if ok:
             _ok(text)
-        else:
-            if is_problem:
-                problems += 1
-            _error(text)
+            return
+        if is_problem:
+            problems += 1
+        _error(text)
         if hint:
             typer.echo(f"  suggerimento: {hint}")
 

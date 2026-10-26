@@ -207,3 +207,74 @@ def test_package_metadata():
     from cgui_studio.models import TERMINAL_STATUS
 
     assert TERMINAL_STATUS == frozenset({"done", "error"})
+
+
+def test_wait_fetches_existing_job(home, sleep_noop, tmp_path):
+    """cgui wait JOBID: job già in archivio → attesa finta + download + manifest."""
+    tar_file = tmp_path / "payload.tar.gz"
+    write_tar(tar_file, {"README": b"from-wait"})
+    payload = tar_file.read_bytes()
+
+    def handler(req):
+        path = req.url.path
+        if path.endswith("/check_status"):
+            return _json({"jobid": "777", "status": "done", "hasTarFile": True, "lastInpStep": 9})
+        if path.endswith("/download"):
+            return httpx.Response(200, content=payload)
+        raise AssertionError(path)
+
+    fake = httpx.Client(transport=httpx.MockTransport(handler), base_url=MOCK_BASE)
+
+    class FakeClient(cli_mod.Client):
+        def __init__(self, *args, **kw):
+            kw.setdefault("http", fake)
+            super().__init__(*args, **kw)
+
+    original = cli_mod.Client
+    paths_mod.save_token("tok", "e@x")
+    with JobStore() as store:
+        store.add("777", '{"upper": "POPC=64", "lower": "POPC=64"}', label="POPC64")
+    cli_mod.Client = FakeClient
+    outdir = home / "res"
+    try:
+        result = runner.invoke(app, ["wait", "777", "--outdir", str(outdir)])
+    finally:
+        cli_mod.Client = original
+
+    assert result.exit_code == 0, result.output
+    with JobStore() as store:
+        rec = store.get_by_jobid("777")
+    assert rec.state == "done" and rec.archive_sha256
+    manifest = json.loads((Path(rec.outdir) / "manifest.json").read_text())
+    assert manifest["jobid"] == "777"
+    assert manifest["spec"]["upper"] == "POPC=64"
+    assert (Path(rec.outdir) / "system" / "README").read_bytes() == b"from-wait"
+
+
+def test_wait_job_not_in_store_uses_defaults(home, sleep_noop, tmp_path):
+    """cgui wait senza record: label generica 'job', nessun crash."""
+    tar_file = tmp_path / "payload.tar.gz"
+    write_tar(tar_file, {"README": b"x"})
+    payload = tar_file.read_bytes()
+
+    def handler(req):
+        if req.url.path.endswith("/check_status"):
+            return _json({"jobid": "888", "status": "done", "hasTarFile": True})
+        return httpx.Response(200, content=payload)
+
+    fake = httpx.Client(transport=httpx.MockTransport(handler), base_url=MOCK_BASE)
+
+    class FakeClient(cli_mod.Client):
+        def __init__(self, *args, **kw):
+            kw.setdefault("http", fake)
+            super().__init__(*args, **kw)
+
+    original = cli_mod.Client
+    paths_mod.save_token("tok", "e@x")
+    cli_mod.Client = FakeClient
+    try:
+        result = runner.invoke(app, ["wait", "888", "--outdir", str(home / "res")])
+    finally:
+        cli_mod.Client = original
+    assert result.exit_code == 0, result.output
+    assert any(folder.name.endswith("_888") for folder in (home / "res").iterdir())
