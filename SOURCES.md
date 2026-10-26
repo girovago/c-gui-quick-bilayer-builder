@@ -101,7 +101,15 @@ Automazione via browser, senza licenza esplicita. **Non integrato.**
 | Automazione browser (Selenium/Playwright) | dipendenza pesante, fragile, e l'API copre il caso d'uso principale |
 | Riscrittura locale del builder lipidico | è esattamente il lavoro che il server fa meglio (e che `lamellyx` fa già) |
 
-## 5. Licenza
+## 5. Attribuzione NGL (vendored)
+
+`web/vendor/ngl.js` è una **copia vendORIZED** di [NGL View](https://github.com/nglviewer/ngl)
+(nglviewer, Alexander Rose et al.), **MIT**, versione `2.5.0` dalla dist
+ufficiale del pacchetto npm `ngl` (UMD standalone con three.js incluso). La
+copia è servita localmente da FastAPI/Vite (nessun CDN). Licenza originale in
+`web/vendor/NGL-LICENSE`.
+
+## 6. Licenza
 
 `cgui-studio` è **MIT**. Nessun codice GPL/AGPL è stato copiato: i progetti con
 licenza copyleft sono citati solo come fonte di fatti verificabili.

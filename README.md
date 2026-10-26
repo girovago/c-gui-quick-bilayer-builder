@@ -4,8 +4,8 @@ Layer **CLI + API** sopra l'API REST ufficiale di **CHARMM-GUI** (Quick Bilayer)
 costruzione di sistemi di membrana in **batch**, con **provenance riproducibile**
 (`manifest.json` + sha256 + archivio immutabile).
 
-La GUI web (FastAPI + Svelte, vista 3D NGL in ogni step) arriverà **sopra** questo
-core: qui solo modelli, client API, store SQLite e CLI, tutti importabili.
+La GUI web (FastAPI + Svelte 5, vista 3D NGL in ogni step) **c'è**: `cgui serve`,
+mock-first, sopra questo core: qui solo modelli, client API, store SQLite e CLI, tutti importabili.
 
 ## Stato
 
@@ -17,7 +17,7 @@ core: qui solo modelli, client API, store SQLite e CLI, tutti importabili.
 | `store.py` — SQLite (WAL) dei job, UNIQUE su `jobid` | fatto |
 | `spec.py` — TOML singolo/multiplo con errori leggibili | fatto |
 | `cli.py` — `login build batch status fetch ls doctor` | fatto |
-| GUI (FastAPI + Svelte 5 + NGL) | da fare |
+| `webui.py` — GUI FastAPI (wizard Quick Bilayer, NGL, job live, mock-first) | fatto |
 
 ## Setup
 
@@ -77,6 +77,45 @@ Con `clone_job_from = "<jobid>"` si riparte dalla struttura di un job precedente
 
 Override per test o home alternative: `CGUI_STUDIO_HOME`.
 Password non interattiva: `CGUI_PASS`.
+
+## GUI web (MVP)
+
+App locale su `http://127.0.0.1:8756`: wizard Quick Bilayer (composizione
+lipidica con validazione live, parametri, payload di debug), **vista 3D NGL**
+del PDB estratto (across/i d'acqua e ioni nascosti, toggle) e lista job live
+con dettaglio (stato, coda, step, tar) + `Scarica e estrai` + `Clona nel form`
+(prefill client-side; il clone server-side via `clone_job` resta disattivo
+nell'MVP). Tema scuro, nessuna dipendenza UI oltre a Tailwind.
+
+Avvio (produzione, build compilate una volta):
+
+```bash
+# build frontend (una tantum, Node >= 20):
+cd web && npm i && npm run build && cd ..
+
+# backend + static:
+uv run cgui serve --port 8756            # usa il token reale in cache
+CGUI_MOCK=1 uv run cgui serve --port 8756  # mock: nessuna rete/token necessari
+```
+
+Sviluppo frontend (hot reload):
+
+```bash
+uv run cgui serve --port 8756 &
+cd web && npm run dev   # http://localhost:5173, proxy /api → :8756
+```
+
+In **mock** (`CGUI_MOCK=1`) il client finto risponde in ~8s (pending → running
+@3s → done @8s) e genera un bilayer PDB di prova (~10k atomi, 2 leaflets a
+z=±2 nm): utile per sviluppare e per i test senza account né coda reale.
+
+- API: `GET /api/ping`, `POST/GET /api/jobs`, `GET /api/jobs/{id}`,
+  `POST /api/jobs/{id}/fetch` (`{"wait": true}` per attendere), `GET
+  /api/files/{id}` e `/api/files/{id}/{path..}` (text/plain per testo,
+  octet-stream per binari), `POST /api/form-preview`.
+- Errori: 404 job non noto/non estratto · 409 token assente
+  (messaggio: esegui `uv run cgui login`) o job non pronto · 422 spec invalida ·
+  502 errori API a monte.
 
 ## Licenza
 

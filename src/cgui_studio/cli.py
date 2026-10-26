@@ -380,6 +380,27 @@ def ls_cmd(ctx: typer.Context) -> None:
         )
 
 
+@app.command("serve")
+@_guarded
+def serve_cmd(
+    ctx: typer.Context,
+    host: Annotated[
+        str, typer.Option("--host", help="Interfaccia di ascolto (default: localhost)")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", help="Porta della GUI web")] = 8756,
+) -> None:
+    """GUI web locale: wizard Quick Bilayer + vista 3D NGL + job live.
+
+    Con CGUI_MOCK=1 gira senza token né rete (server finto locale).
+    """
+    from . import webui
+
+    if os.environ.get("CGUI_MOCK"):
+        typer.secho("MOCK attivo: nessuna chiamata reale a charmm-gui.org", fg=typer.colors.CYAN)
+    typer.echo(f"GUI su http://{host}:{port}")
+    webui.run(host=host, port=port)
+
+
 @app.command("doctor")
 @_guarded
 def doctor_cmd(ctx: typer.Context) -> None:
