@@ -1,0 +1,18 @@
+# Serie di composizioni: stesso margine, lipidica diversa.
+# cgui batch examples/batch.toml --wait --max-parallel 2
+
+[[build]]
+label = "POPC64"
+upper = "POPC=64"
+lower = "POPC=64"
+
+[[build]]
+label = "POPE-POPG"
+upper = "POPE=48:POPG=16"
+lower = "POPE=48:POPG=16"
+ion_conc = 0.15
+ion_type = "KCl"
+
+[[build]]
+label = "plasma-mammalian"
+membtype = "PMm"

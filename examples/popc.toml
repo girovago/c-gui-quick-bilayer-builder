@@ -1,0 +1,9 @@
+# Membrana simmetrica POPC 64+64, NaCl 0.15 M, margine d'acqua 20 Å.
+# cgui build examples/popc.toml --wait
+[build]
+label = "POPC64"
+upper = "POPC=64"
+lower = "POPC=64"
+margin = 20.0
+ion_conc = 0.15
+ion_type = "NaCl"

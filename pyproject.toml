@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cgui-studio"
+version = "0.1.0"
+description = "Batch, reproducible layer over the CHARMM-GUI REST API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Giorgio Veneruso", email = "giorgi.veneruso@studenti.unina.it" }]
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2.6",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+cgui = "cgui_studio.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cgui_studio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
