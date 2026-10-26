@@ -84,6 +84,11 @@ class JobStore:
                 self._conn.close()
                 self._conn = None
 
+    def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
+        if self._conn is None:
+            raise CguiError("archivio chiuso: usa `with JobStore() as ...`")
+        return self._conn.execute(sql, params)
+
     @staticmethod
     def _dumps(spec: Any) -> str:
         if isinstance(spec, str):  # già JSON
@@ -108,7 +113,7 @@ class JobStore:
         now = _now()
         try:
             with self._lock:
-                cur = self._conn.execute(
+                cur = self._execute(
                     "INSERT INTO jobs "
                     "(jobid, label, spec_json, state, created_at, updated_at, outdir) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -143,20 +148,20 @@ class JobStore:
         )
         values = [_now()] + [fields[k] for k in keys] + [str(jobid)]
         with self._lock:
-            self._conn.execute(sql, values)
+            self._execute(sql, tuple(values))
             self._conn.commit()
         return self.get_by_jobid(jobid)
 
     def get_by_jobid(self, jobid: str) -> JobRecord | None:
         with self._lock:
-            cur = self._conn.execute("SELECT * FROM jobs WHERE jobid = ?", (str(jobid),))
+            cur = self._execute("SELECT * FROM jobs WHERE jobid = ?", (str(jobid),))
             row = cur.fetchone()
         return _record(row) if row else None
 
     def list_jobs(self, limit: int = 50) -> list[JobRecord]:
         limit = max(0, int(limit))
         with self._lock:
-            cur = self._conn.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,))
+            cur = self._execute("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,))
             rows = cur.fetchall()
         return [_record(row) for row in rows]
 

@@ -300,3 +300,24 @@ def test_download_404_raises_job_error(tmp_path):
 
     with pytest.raises(JobError, match="404"):
         mock_client(handler, token="t").download("5", tmp_path / "nope.tgz")
+
+
+def test_fetch_job_slugifies_label(home):
+    """Una label con / o ../ non deve creare cartelle fuori da results."""
+
+    payload = make_tar_bytes({"README": b"x"})
+
+    def handler(req):
+        if req.url.path.endswith("/check_status"):
+            return _json({"jobid": "42", "status": "done", "hasTarFile": True})
+        return httpx.Response(200, content=payload)
+
+    result = fetch_job(
+        mock_client(handler, token="t"),
+        "42",
+        home / "results",
+        label="../../etc/passwd",
+    )
+    name = result["dir"].name
+    assert ".." not in name and "/" not in name
+    assert name.startswith(_dt.date.today().isoformat())

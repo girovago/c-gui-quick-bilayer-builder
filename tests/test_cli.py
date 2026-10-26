@@ -278,3 +278,25 @@ def test_wait_job_not_in_store_uses_defaults(home, sleep_noop, tmp_path):
         cli_mod.Client = original
     assert result.exit_code == 0, result.output
     assert any(folder.name.endswith("_888") for folder in (home / "res").iterdir())
+
+
+def test_wait_timeout_is_passed_to_client(home, sleep_noop, monkeypatch):
+    """BUG fixato: cgui wait --timeout N arriva davvero a Client.wait."""
+    timeout_seen: dict[str, float] = {}
+
+    def fake_wait(self, jobid, *, timeout_s=3600, interval_s=20, on_update=None):
+        timeout_seen["wait"] = timeout_s
+        raise cli_mod.JobError(f"job {jobid} terminato in errore")
+
+    monkeypatch.setattr(cli_mod.Client, "wait", fake_wait)
+    monkeypatch.setattr(
+        cli_mod, "fetch_job", lambda *a, **k: pytest_fail("fetch non doveva partire")
+    )
+    paths_mod.save_token("tok", "e@x")
+    result = runner.invoke(app, ["wait", "42", "--timeout", "123", "--outdir", str(home / "r")])
+    assert timeout_seen["wait"] == 123
+    assert result.exit_code == 1  # stato error → exit 1, ma il timeout è arrivato
+
+
+def pytest_fail(msg):  # gruccia del test: non deve essere mai chiamata
+    raise AssertionError(msg)

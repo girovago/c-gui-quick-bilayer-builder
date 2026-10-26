@@ -28,7 +28,7 @@ import httpx
 
 from . import archive, paths
 from .archive import sha256_file
-from .models import JobStatus, Spec
+from .models import JobStatus, Spec, slugify
 
 BASE_URL = "https://charmm-gui.org/api"
 RETRY_STATUS = {500, 502, 503, 504}
@@ -244,8 +244,20 @@ class Client:
         start = time.monotonic()
         delay = interval_s
         last: JobStatus | None = None
+        failures = 0
         while True:
-            st = self.status(jobid)
+            try:
+                st = self.status(jobid)
+            except ApiError:
+                # un blackout oltre i retry interni non deve ammazzare il
+                # wait: i job CHARMM-GUI durano ore (10 sonde ≈ 15-20 min)
+                failures += 1
+                if failures > 10:
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 1.5, 60)
+                continue
+            failures = 0
             changed = last is None or st.status != last.status or st.rank != last.rank
             if on_update and changed:
                 on_update(st)
@@ -296,7 +308,7 @@ def fetch_job(
         )
 
     stamp = date.today().isoformat()
-    folder = outdir / f"{stamp}_{label or 'job'}_{jobid}"
+    folder = outdir / f"{stamp}_{slugify(label)}_{jobid}"
     system_dir = folder / "system"
     tar_path = folder / f"job_{jobid}.tar.gz"
 

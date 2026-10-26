@@ -63,3 +63,15 @@ def test_missing_and_malformed_fields_tolerated():
 def test_fallback_jobid():
     st = JobStatus.from_json({"status": "done"}, jobid="77")
     assert st.jobid == "77"
+
+
+def test_wrong_types_do_not_crash_from_json():
+    """Il contratto è 'never raise': anche tipi strutturalmente sbagliati."""
+    st = JobStatus.from_json({"jobid": 42, "status": 5, "rank": {"pos": 1}, "lastInpStep": "x"})
+    assert st.error is not None
+    assert st.is_terminal is False
+
+
+def test_jobid_int_coerced_or_error():
+    st = JobStatus.from_json({"jobid": 42, "lastInpStep": "5"})
+    print(st)

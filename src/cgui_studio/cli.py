@@ -104,7 +104,13 @@ def _sync_store(jobid: str, st: JobStatus) -> None:
 
 
 def _wait_and_fetch(
-    client: Client, jobid: str, label: str | None, spec_json: str | None, outdir: Path
+    client: Client,
+    jobid: str,
+    label: str | None,
+    spec_json: str | None,
+    outdir: Path,
+    *,
+    timeout_s: float = 3600,
 ) -> dict[str, Any]:
     def on_update(st: JobStatus) -> None:
         parts = [f"[{st.status or '?'}]"]
@@ -114,7 +120,7 @@ def _wait_and_fetch(
             parts.append(f"step {st.last_inp_step}")
         typer.echo("  " + " ".join(parts))
 
-    st = client.wait(jobid, on_update=on_update)
+    st = client.wait(jobid, timeout_s=timeout_s, on_update=on_update)
     _sync_store(jobid, st)
     if st.status != "done":
         raise JobError(f"Job {jobid} finito con stato '{st.status or '?'}': niente da scaricare.")
@@ -173,6 +179,7 @@ def build_cmd(
     outdir: Annotated[
         Path | None, typer.Option("--outdir", help="Cartella risultati (default: data/results)")
     ] = None,
+    timeout: Annotated[float, typer.Option("--timeout", help="Massimo secondi di attesa")] = 3600,
 ) -> None:
     """Invia UN build da file TOML; con --wait attende e scarica."""
     specs = spec_mod.load_spec_file(spec_file)
@@ -183,11 +190,15 @@ def build_cmd(
     with _client() as client:
         response = client.submit(sp)
         jobid = str(response.get("jobid", ""))
+        if not jobid:
+            raise ApiError(f"job inviato ma senza jobid nella risposta: {response}")
         _ok(f"Job inviato: {jobid}  (modules={response.get('modules')})")
         with JobStore() as store:
             rec = store.add(jobid, sp, state="submitted")
         if wait_flag:
-            result = _wait_and_fetch(client, jobid, sp.label, rec.spec_json, dest)
+            result = _wait_and_fetch(
+                client, jobid, sp.label, rec.spec_json, dest, timeout_s=timeout
+            )
             _print_fetch_summary(result)
 
 
@@ -202,12 +213,16 @@ def batch_cmd(
     max_parallel: Annotated[
         int, typer.Option("--max-parallel", min=1, max=8, help="Submit/attese in parallelo")
     ] = 2,
+    outdir: Annotated[
+        Path | None, typer.Option("--outdir", help="Cartella risultati (default: data/results)")
+    ] = None,
+    timeout: Annotated[float, typer.Option("--timeout", help="Massimo secondi di attesa")] = 3600,
 ) -> None:
     """Invia più build dallo stesso file TOML."""
     specs = spec_mod.load_spec_file(path)
     if not specs:
         _die(f"Nessun blocco [[build]] in {path}.")
-    dest = paths.default_results_dir()
+    dest = outdir or paths.default_results_dir()
     typer.echo(f"{len(specs)} build da inviare (parall.={max_parallel}, uscita: {dest})")
 
     def one(sp: Spec) -> tuple[bool, str, str]:
@@ -215,12 +230,16 @@ def batch_cmd(
             with _client() as client:
                 response = client.submit(sp)
                 jobid = str(response.get("jobid", ""))
+                if not jobid:
+                    raise ApiError(f"job inviato ma senza jobid nella risposta: {response}")
                 with JobStore() as store:
                     rec = store.add(jobid, sp, state="submitted")
             typer.echo(f"  inviato: {jobid}  ({sp.label or 'no-label'})")
             if wait_flag and jobid:
                 with _client(require_token=True) as client2:
-                    _wait_and_fetch(client2, jobid, sp.label, rec.spec_json, dest)
+                    _wait_and_fetch(
+                        client2, jobid, sp.label, rec.spec_json, dest, timeout_s=timeout
+                    )
             return True, jobid, ""
         except CguiError as exc:
             return False, "-", str(exc)
@@ -302,7 +321,12 @@ def wait_cmd(
         rec = store.get_by_jobid(jobid)
     with _client(require_token=True) as client:
         result = _wait_and_fetch(
-            client, jobid, rec.label if rec else None, rec.spec_json if rec else None, dest
+            client,
+            jobid,
+            rec.label if rec else None,
+            rec.spec_json if rec else None,
+            dest,
+            timeout_s=timeout,
         )
     _print_fetch_summary(result)
 

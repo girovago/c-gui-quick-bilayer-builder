@@ -18,7 +18,7 @@ import json
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 #: stati in cui il job è chiuso e non ha senso ri-interrogarlo
 TERMINAL_STATUS = frozenset({"done", "error"})
@@ -32,6 +32,14 @@ MEMBRANE_PRESETS = (
     "YMm", "YMf", "YMp", "aYM",
     "ERm", "ERf", "ERp", "aER",
 )  # fmt: skip
+
+
+def slugify(label: str | None) -> str:
+    """Label → nome sicuro per la cartella risultati (nessuna sub-cartella)."""
+    if not label:
+        return "job"
+    slug = re.sub(r"[^\w.\-]+", "_", label.strip()).strip("._")
+    return slug or "job"
 
 
 def format_number(value: float) -> str:
@@ -181,19 +189,28 @@ class JobStatus(BaseModel):
                 status=None,
                 error=f"risposta non interpretabile dal server: {payload!r:.200}",
             )
-        return cls(
-            jobid=payload.get("jobid") or jobid,
-            status=payload.get("status"),
-            rank=payload.get("rank"),
-            rqinfo=payload.get("rqinfo"),
-            pidfile=payload.get("pidfile"),
-            has_tar=_as_bool(payload.get("hasTarFile", payload.get("has_tar"))),
-            last_out_file=payload.get("lastOutFile") or payload.get("last_out_file"),
-            last_out_line=_as_int(payload.get("lastOutLine", payload.get("last_out_line"))),
-            last_out_time=payload.get("lastOutTime") or payload.get("last_out_time"),
-            last_inp_step=_as_int(payload.get("lastInpStep", payload.get("last_inp_step"))),
-            error=payload.get("error"),
-        )
+        try:
+            return cls(
+                jobid=payload.get("jobid") or jobid,
+                status=payload.get("status"),
+                rank=payload.get("rank"),
+                rqinfo=payload.get("rqinfo"),
+                pidfile=payload.get("pidfile"),
+                has_tar=_as_bool(payload.get("hasTarFile", payload.get("has_tar"))),
+                last_out_file=payload.get("lastOutFile") or payload.get("last_out_file"),
+                last_out_line=_as_int(payload.get("lastOutLine", payload.get("last_out_line"))),
+                last_out_time=payload.get("lastOutTime") or payload.get("last_out_time"),
+                last_inp_step=_as_int(payload.get("lastInpStep", payload.get("last_inp_step"))),
+                error=payload.get("error"),
+            )
+        except ValidationError:
+            # pydantic lax non coerces int/dict → str: una risposta col tipo
+            # sbagliato NON deve uccidere un wait/poll (contratto: mai sollevare)
+            return cls(
+                jobid=jobid,
+                status=None,
+                error=f"campi non interpretabili dal server: {payload!r:.200}",
+            )
 
     @property
     def is_terminal(self) -> bool:
