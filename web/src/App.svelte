@@ -5,6 +5,7 @@
   import { onMount } from "svelte";
   import Molecule from "./Molecule.svelte";
   import SpecSketch from "./SpecSketch.svelte";
+  import BatchPanel from "./BatchPanel.svelte";
   import { api, formToPayload, isFormValid, parseLipidText, lipidRe } from "./api.js";
 
   // ------------------------------------------------------------------ form state
@@ -38,6 +39,8 @@
   let previewOpen = $state(false);
   let previewData = $state(null);
   let mockMode = $state(false);
+  let panel = $state("single"); // "single" | "batch" — i pannelli restano MONTATI (hidden):
+  // cambiare tab non distrugge la coda batch (che vive in-session)
 
   const record = $derived(detail?.record ?? null);
   const status = $derived(detail?.status ?? null);
@@ -159,6 +162,12 @@
     filesDirty = true;
   }
 
+  /** Callback del BatchPanel: evidenzia il job nella lista e la aggiorna subito. */
+  function pickAndRefresh(id) {
+    selectJob(id);
+    refreshJobs();
+  }
+
   // ------------------------------------------------------------------ polling
   // Fix verifier (BUG 2): niente martelletta fissa a 2s sull'API reale.
   // - pausa completa della tab: document.hidden (visibilitychange);
@@ -246,7 +255,33 @@
   <main class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)_minmax(320px,1fr)]">
     <!-- ============================================ colonna FORM -->
     <section class="min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3" aria-label="Costruzione">
-      <h2 class="mb-2 text-sm font-semibold text-zinc-300">1 · Composizione</h2>
+      <div class="mb-3 flex gap-1" role="tablist" aria-label="Modalità di composizione">
+        <button
+          type="button"
+          role="tab"
+          class="rounded px-3 py-1 text-xs font-medium text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 {panel === 'single'
+            ? 'bg-cyan-950/60 ring-1 ring-cyan-600'
+            : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}"
+          aria-selected={panel === "single"}
+          onclick={() => (panel = "single")}
+        >
+          Singolo
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="rounded px-3 py-1 text-xs font-medium text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 {panel === 'batch'
+            ? 'bg-cyan-950/60 ring-1 ring-cyan-600'
+            : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}"
+          aria-selected={panel === "batch"}
+          onclick={() => (panel = "batch")}
+        >
+          Batch
+        </button>
+      </div>
+
+      <div class={panel !== "single" && "hidden"} role="tabpanel" aria-label="Wizard singolo">
+        <h2 class="mb-2 text-sm font-semibold text-zinc-300">1 · Composizione</h2>
       <label class="mb-1 block text-xs text-zinc-400" for="f-label">etichetta</label>
       <input id="f-label" class="mb-2 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 focus:border-cyan-500 focus:outline-none" bind:value={form.label} placeholder="es. POPC64" />
 
@@ -332,6 +367,14 @@
           <pre>{JSON.stringify(previewData.form)}</pre>
         </div>
       {/if}
+      </div>
+
+      <!-- BatchPanel resta MONTATO anche nei tab in cui non è visibile (class:hidden,
+           non {#if}): cambiare tab non distrugge la coda in-session -->
+      <div class={(panel !== "batch" && "hidden")} role="tabpanel" aria-label="Coda batch multi-composizione">
+        <h2 class="mb-2 text-sm font-semibold text-zinc-300">Batch multi-composizione</h2>
+        <BatchPanel {form} mock={mockMode} onPick={pickAndRefresh} onToast={flash} />
+      </div>
     </section>
 
     <!-- ============================================ colonna 3D -->
