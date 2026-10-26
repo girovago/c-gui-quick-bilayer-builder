@@ -15,6 +15,7 @@
   let style = $state("spacefill"); // stile della rappresentazione principale
   let panelOpen = $state(true); // pannello controlli (⚙ collassa su schermi stretti)
   let hint = $state(false); // pillola hint mouse (5s dal mount)
+  let note = $state(""); // messaggio onesto su stile non applicabile (es. cartoon su lipidi puri)
   let lastLoaded = null;
   let lastRequested = null; // il check corre dopo l'await: evita la race del cambio job
   let waterRepr = null;
@@ -32,6 +33,7 @@
       return;
     }
     stage = new window.NGL.Stage(holder, { backgroundColor: "#0b0f1a" });
+    window.__ngl_stage = stage; // probe debug da tools.browser
     // su schermo stretto i controlli partono chiusi (il ⚙ li riapre)
     if (typeof window.innerWidth === "number" && window.innerWidth < 640) panelOpen = false;
     hint = true;
@@ -41,6 +43,7 @@
       stage.removeAllComponents();
       stage.dispose();
       stage = null;
+      delete window.__ngl_stage;
     };
   });
 
@@ -51,11 +54,28 @@
     return { sele: SELE_CLEAN, radius: "schematic" }; // spacefill (default)
   }
 
+  function hasProtein() {
+    // cartoon disegna il backbone proteico: conta atomi di backbone reali
+    // (il solo 'protein' matcha catene finte tipo le code GLY/OLE dei lipidi)
+    try {
+      if (!compRef || !compRef.structure) return false;
+      return compRef.structure.getAtomIndices(new window.NGL.Selection("protein and backbone")).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   function setStyle(name) {
     const prev = style;
     style = name;
+    note = "";
     try {
       if (!compRef) return;
+      if (name === "cartoon" && !hasProtein()) {
+        style = prev; // la select resta sullo stile reale, il note spiega perché
+        note = "cartoon disegna solo catene proteiche: su un bilayer di soli lipidi non c'è nulla da disegnare.";
+        return;
+      }
       if (mainRepr) compRef.removeRepresentation(mainRepr); // SOLO la principale
       mainRepr = compRef.addRepresentation(name, mainParams(name));
     } catch (e) {
@@ -76,7 +96,15 @@
 
   function decorate(comp) {
     compRef = comp;
-    mainRepr = comp.addRepresentation(style, mainParams(style));
+    let effStyle = style;
+    if (style === "cartoon" && !hasProtein()) {
+      // nuovo sistema senza backbone (es. si torna al sample): il cartoon
+      // lascerebbe la scena vuota → spacefill e nota onesta
+      effStyle = "spacefill";
+      style = "spacefill";
+      note = "cartoon non applicabile a questo sistema (nessuna proteina): spacefill attivo.";
+    }
+    mainRepr = comp.addRepresentation(effStyle, mainParams(effStyle));
     waterRepr = comp.addRepresentation("spacefill", {
       sele: SELE_SOLVENT,
       radius: 0.3,
@@ -187,6 +215,9 @@
             <option value="cartoon">cartoon</option>
           </select>
         </label>
+        {#if note}
+          <p class="max-w-[13rem] text-[11px] leading-snug text-amber-300" role="status">{note}</p>
+        {/if}
         <button
           type="button"
           class="rounded border border-zinc-600 px-1.5 py-0.5 text-left hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
