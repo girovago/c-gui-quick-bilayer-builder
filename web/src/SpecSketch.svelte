@@ -81,16 +81,16 @@
   }
 </script>
 
-<div class="mb-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-2" aria-label="Schema della spec">
+<div class="mb-2 rounded-lg border border-zinc-200 bg-white p-2" aria-label="Schema della spec">
   <div class="mb-1 flex items-baseline justify-between gap-2 px-1">
     <span
-      class="rounded border border-violet-500/50 bg-violet-950/60 px-2 py-0.5 text-[11px] font-semibold text-violet-300"
+      class="rounded border border-violet-500/50 bg-violet-950/60 px-2 py-0.5 text-[11px] font-semibold text-violet-700"
     >
       SCHEMA DELLA SPEC — provvisorio
     </span>
     <button
       type="button"
-      class="text-[11px] text-zinc-500 hover:text-zinc-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+      class="text-[11px] text-zinc-500 hover:text-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
       onclick={() => (showLabels = !showLabels)}
       aria-pressed={showLabels}
     >
@@ -100,7 +100,7 @@
 
   {#if empty}
     <p class="px-1 pb-1 text-[11px] text-zinc-500">
-      scrivi la composizione (es. <code class="text-zinc-400">POPC=64</code>) o scegli un membtype
+      scrivi la composizione (es. <code class="text-zinc-600">POPC=64</code>) o scegli un membtype
       per vedere lo schema
     </p>
   {:else}
@@ -118,10 +118,10 @@
         aria-hidden={true}
       >
         <!-- linea centrale della membrana -->
-        <line x1={MARGIN} y1={H / 2} x2={W - MARGIN} y2={H / 2} stroke="#3f3f46" stroke-dasharray="4 6" stroke-width="1" />
+        <line x1={MARGIN} y1={H / 2} x2={W - MARGIN} y2={H / 2} stroke="#a1a1aa" stroke-dasharray="4 6" stroke-width="1" />
 
         {#if presetMode}
-          <text x={W / 2} y={H / 2 - 10} text-anchor="middle" class="fill-zinc-300" font-size="15" font-weight="600">
+          <text x={W / 2} y={H / 2 - 10} text-anchor="middle" class="fill-zinc-700" font-size="15" font-weight="600">
             preset server `{membtype}`
           </text>
           <text x={W / 2} y={H / 2 + 12} text-anchor="middle" class="fill-zinc-500" font-size="11">
@@ -150,9 +150,9 @@
   {/if}
 
   {#if showLabels && !empty}
-    <div class="mt-1 px-1 text-[11px] leading-snug text-zinc-400">
+    <div class="mt-1 px-1 text-[11px] leading-snug text-zinc-600">
       {#if presetMode}
-        <span class="text-violet-300">{membtype}</span> — la composizione reale la conosce solo il
+        <span class="text-violet-700">{membtype}</span> — la composizione reale la conosce solo il
         server
       {:else}
         <span class="text-zinc-500">upper:</span>

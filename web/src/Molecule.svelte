@@ -177,14 +177,14 @@
   {/if}
 
   {#if isSample}
-    <div class="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded border border-amber-500/70 bg-amber-950/85 px-3 py-1 text-center text-xs text-amber-200 backdrop-blur">
+    <div class="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded border border-amber-400 bg-amber-100/90 px-3 py-1 text-center text-xs text-amber-900 backdrop-blur">
       <span class="font-semibold tracking-wide">STRUTTURA CAMPIONE</span>
-      <span class="text-amber-300/80"> — demo locale, non il tuo sistema</span>
+      <span class="text-amber-700"> — demo locale, non il tuo sistema</span>
     </div>
   {/if}
 
   {#if hint}
-    <div class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-black/70 px-3 py-1 text-xs text-zinc-300 backdrop-blur">
+    <div class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-white/80 px-3 py-1 text-xs text-zinc-700 backdrop-blur">
       trascina = ruota · rotella = zoom · tasto destro = sposta
     </div>
   {/if}
@@ -197,17 +197,17 @@
   >
     {#if panelOpen}
       <div
-        class="flex flex-col gap-1.5 rounded bg-black/60 p-2 text-xs text-zinc-200 backdrop-blur"
+        class="flex flex-col gap-1.5 rounded bg-white/85 p-2 text-xs text-zinc-700 backdrop-blur"
         role="group"
         aria-label="Controlli vista 3D"
       >
         <label class="flex items-center gap-1.5">
-          <span class="text-zinc-400">stile</span>
+          <span class="text-zinc-500">stile</span>
           <select
             bind:value={style}
             onchange={() => setStyle(style)}
             aria-label="Stile di rappresentazione"
-            class="w-[7.5rem] rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-xs text-zinc-100 focus:border-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+            class="w-[7.5rem] rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800 focus:border-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
           >
             <option value="spacefill">spacefill</option>
             <option value="ball+stick">ball+stick</option>
@@ -216,11 +216,11 @@
           </select>
         </label>
         {#if note}
-          <p class="max-w-[13rem] text-[11px] leading-snug text-amber-300" role="status">{note}</p>
+          <p class="max-w-[13rem] text-[11px] leading-snug text-amber-700" role="status">{note}</p>
         {/if}
         <button
           type="button"
-          class="rounded border border-zinc-600 px-1.5 py-0.5 text-left hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+          class="rounded border border-zinc-300 px-1.5 py-0.5 text-left hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
           onclick={resetView}
         >
           reimposta vista
@@ -229,7 +229,7 @@
     {/if}
     <button
       type="button"
-      class="rounded bg-black/60 px-2 py-1 text-xs text-zinc-200 backdrop-blur hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+      class="rounded bg-white/85 px-2 py-1 text-xs text-zinc-700 backdrop-blur hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
       onclick={() => (panelOpen = !panelOpen)}
       aria-pressed={panelOpen}
       aria-label="Mostra/nascondi controlli vista 3D"
@@ -240,7 +240,7 @@
   </div>
 
   <label
-    class="absolute right-3 bottom-3 flex cursor-pointer items-center gap-2 rounded bg-black/60 px-2 py-1 text-xs text-zinc-200 backdrop-blur transition-opacity focus-within:ring-2 focus-within:ring-cyan-500"
+    class="absolute right-3 bottom-3 flex cursor-pointer items-center gap-2 rounded bg-white/85 px-2 py-1 text-xs text-zinc-700 backdrop-blur transition-opacity focus-within:ring-2 focus-within:ring-cyan-500"
     class:opacity-0={state !== "ready"}
     class:pointer-events-none={state !== "ready"}
   >

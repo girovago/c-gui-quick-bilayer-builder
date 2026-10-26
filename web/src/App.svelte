@@ -26,7 +26,6 @@
   let valid = $derived(isFormValid(form));
 
   const MEMB_PRESETS = ["PMm", "aPM", "ENDm", "ENDf", "ENDp", "BTm", "BTf", "BTp", "GMm", "YMm", "ERm"];
-  const ION_NOTE = "il server usa questi minuscoli, la doc ufficiale dice maiuscoli — bug noto (SOURCES.md §2)";
 
   // ------------------------------------------------------------------ jobs state
   let jobs = $state([]);
@@ -244,24 +243,24 @@
 
 <div class="mx-auto max-w-[1600px] px-4 py-4 lg:px-6">
   <header class="mb-4 flex items-baseline justify-between gap-4">
-    <h1 class="text-lg font-semibold tracking-tight text-zinc-100">
+    <h1 class="text-lg font-semibold tracking-tight text-zinc-800">
       cgui-studio <span class="text-zinc-500">· Quick Bilayer wizard</span>
     </h1>
-    <span class="rounded-full border border-cyan-800/60 px-2 py-0.5 text-xs text-cyan-300" title="CGUI_MOCK=1: nessuna chiamata reale a charmm-gui.org">
+    <span class="rounded-full border border-cyan-300 px-2 py-0.5 text-xs text-cyan-700" title="CGUI_MOCK=1: nessuna chiamata reale a charmm-gui.org">
       {mockMode ? "MOCK" : "API reale"}
     </span>
   </header>
 
   <main class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)_minmax(320px,1fr)]">
     <!-- ============================================ colonna FORM -->
-    <section class="min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3" aria-label="Costruzione">
+    <section class="min-w-0 rounded-lg border border-zinc-200 bg-white p-3" aria-label="Costruzione">
       <div class="mb-3 flex gap-1" role="tablist" aria-label="Modalità di composizione">
         <button
           type="button"
           role="tab"
-          class="rounded px-3 py-1 text-xs font-medium text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 {panel === 'single'
-            ? 'bg-cyan-950/60 ring-1 ring-cyan-600'
-            : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}"
+          class="rounded px-3 py-1 text-xs font-medium text-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 {panel === 'single'
+            ? 'bg-cyan-100 ring-1 ring-cyan-500'
+            : 'bg-zinc-200 text-zinc-600 hover:text-zinc-800'}"
           aria-selected={panel === "single"}
           onclick={() => (panel = "single")}
         >
@@ -270,9 +269,9 @@
         <button
           type="button"
           role="tab"
-          class="rounded px-3 py-1 text-xs font-medium text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 {panel === 'batch'
-            ? 'bg-cyan-950/60 ring-1 ring-cyan-600'
-            : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'}"
+          class="rounded px-3 py-1 text-xs font-medium text-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 {panel === 'batch'
+            ? 'bg-cyan-100 ring-1 ring-cyan-500'
+            : 'bg-zinc-200 text-zinc-600 hover:text-zinc-800'}"
           aria-selected={panel === "batch"}
           onclick={() => (panel = "batch")}
         >
@@ -281,66 +280,62 @@
       </div>
 
       <div class={panel !== "single" && "hidden"} role="tabpanel" aria-label="Wizard singolo">
-        <h2 class="mb-2 text-sm font-semibold text-zinc-300">1 · Composizione</h2>
-      <label class="mb-1 block text-xs text-zinc-400" for="f-label">etichetta</label>
-      <input id="f-label" class="mb-2 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 focus:border-cyan-500 focus:outline-none" bind:value={form.label} placeholder="es. POPC64" />
+        <h2 class="mb-2 text-sm font-semibold text-zinc-700">1 · Composizione</h2>
+      <label class="mb-1 block text-xs text-zinc-600" for="f-label">etichetta</label>
+      <input id="f-label" class="mb-2 w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800 focus:border-cyan-500 focus:outline-none" bind:value={form.label} placeholder="es. POPC64" />
 
       <fieldset class="mb-2">
         <legend class="mb-1 text-xs text-zinc-500">modalità</legend>
-        <div class="flex items-center gap-3 text-xs text-zinc-300">
+        <div class="flex items-center gap-3 text-xs text-zinc-700">
           <label><input type="radio" name="mode" class="accent-cyan-500" checked={form.membtype === ""} onchange={() => (form.membtype = "")} /> upper/lower</label>
           <label><input type="radio" name="mode" class="accent-cyan-500" checked={form.membtype !== ""} onchange={() => (form.membtype = "PMm")} /> membtype</label>
         </div>
       </fieldset>
 
       {#if form.membtype === ""}
-        <label class="mb-1 block text-xs text-zinc-400" for="f-upper">foglia upper (righe LIPID=count)</label>
-        <textarea id="f-upper" rows="2" class="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-cyan-500 focus:outline-none" bind:value={form.upper}></textarea>
-        <label class="mb-1 block text-xs text-zinc-400" for="f-lower">foglia lower</label>
-        <textarea id="f-lower" rows="2" class="mb-2 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-xs text-zinc-100 focus:border-cyan-500 focus:outline-none" bind:value={form.lower}></textarea>
+        <label class="mb-1 block text-xs text-zinc-600" for="f-upper">foglia upper (righe LIPID=count)</label>
+        <textarea id="f-upper" rows="2" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 font-mono text-xs uppercase text-zinc-800 focus:border-cyan-500 focus:outline-none" bind:value={form.upper}></textarea>
+        <label class="mb-1 block text-xs text-zinc-600" for="f-lower">foglia lower</label>
+        <textarea id="f-lower" rows="2" class="mb-2 w-full rounded border border-zinc-300 bg-white px-2 py-1 font-mono text-xs uppercase text-zinc-800 focus:border-cyan-500 focus:outline-none" bind:value={form.lower}></textarea>
         {#if !upperOk}
-          <p class="mb-2 text-xs text-amber-400">righe non valide: servono LIPID=count (es. POPC=64)</p>
+          <p class="mb-2 text-xs text-amber-600">righe non valide: servono LIPID=count (es. POPC=64)</p>
         {/if}
       {:else}
-        <label class="mb-1 block text-xs text-zinc-400" for="f-membtype">biomembrana predefinita</label>
-        <select id="f-membtype" class="mb-2 w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100" bind:value={form.membtype}>
+        <label class="mb-1 block text-xs text-zinc-600" for="f-membtype">biomembrana predefinita</label>
+        <select id="f-membtype" class="mb-2 w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.membtype}>
           {#each MEMB_PRESETS as m (m)}
             <option value={m}>{m}</option>
           {/each}
         </select>
       {/if}
 
-      <h2 class="mb-2 mt-3 text-sm font-semibold text-zinc-300">2 · parametri</h2>
+      <h2 class="mb-2 mt-3 text-sm font-semibold text-zinc-700">2 · parametri</h2>
       <div class="grid grid-cols-3 gap-2">
-        <label for="f-margin"><span class="mb-1 block text-xs text-zinc-400">margin</span>
-          <input id="f-margin" type="number" step="0.1" min="0.5" class="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100" bind:value={form.margin} />
+        <label for="f-margin"><span class="mb-1 block text-xs text-zinc-600">margin</span>
+          <input id="f-margin" type="number" step="0.1" min="0.5" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.margin} />
         </label>
-        <label for="f-wdist"><span class="mb-1 block text-xs text-zinc-400">wdist</span>
-          <input id="f-wdist" type="number" step="0.1" class="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100" bind:value={form.wdist} />
+        <label for="f-wdist"><span class="mb-1 block text-xs text-zinc-600">wdist</span>
+          <input id="f-wdist" type="number" step="0.1" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.wdist} />
         </label>
-        <label for="f-ionconc"><span class="mb-1 block text-xs text-zinc-400">ion_conc</span>
-          <input id="f-ionconc" type="number" step="0.01" min="0" class="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100" bind:value={form.ion_conc} />
+        <label for="f-ionconc"><span class="mb-1 block text-xs text-zinc-600">ion_conc</span>
+          <input id="f-ionconc" type="number" step="0.01" min="0" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.ion_conc} />
         </label>
       </div>
       <label for="f-iontype">
-        <span class="mb-1 mt-2 block text-xs text-zinc-400">ion_type</span>
-        <select id="f-iontype" class="w-40 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100" bind:value={form.ion_type}>
-          <option>NaCl</option>
-          <option>KCl</option>
+        <span class="mb-1 mt-2 block text-xs text-zinc-600">ion_type</span>
+        <select id="f-iontype" class="w-40 rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800 uppercase" bind:value={form.ion_type}>
+          <option value="NaCl">NACL</option>
+          <option value="KCl">KCL</option>
         </select>
       </label>
-      <p class="mt-1 flex items-start gap-1 text-[11px] leading-snug text-amber-400/90" role="note">
-        <span aria-hidden="true">⚠</span>{ION_NOTE}
-      </p>
-
-      <div class="mt-3 flex flex-col gap-1 text-xs text-zinc-300">
+      <div class="mt-3 flex flex-col gap-1 text-xs text-zinc-700">
         <label><input type="checkbox" class="accent-cyan-500" bind:checked={form.membrane_only} /> membrane_only</label>
         <label><input type="checkbox" class="accent-cyan-500" bind:checked={form.run_ffconverter} /> run_ffconverter (necessario per gli input GROMACS)</label>
       </div>
 
       <div class="mt-4 flex items-center gap-2">
         <button
-          class="rounded bg-cyan-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+          class="rounded bg-cyan-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-600"
           onclick={submitJob}
           disabled={!valid || busy}
           aria-disabled={!valid || busy}
@@ -348,19 +343,19 @@
           Invia
         </button>
         <button
-          class="rounded border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-50"
+          class="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-50"
           onclick={showPreview}
           aria-expanded={previewOpen}
         >
           Payload
         </button>
         {#if statusMsg}
-          <span class="truncate text-xs text-emerald-400">{statusMsg}</span>
+          <span class="truncate text-xs text-emerald-700">{statusMsg}</span>
         {/if}
       </div>
 
       {#if previewOpen && previewData}
-        <div class="mt-3 max-h-56 overflow-auto rounded border border-zinc-700 bg-black/60 p-2 font-mono text-[11px] leading-relaxed text-zinc-300">
+        <div class="mt-3 max-h-56 overflow-auto rounded border border-zinc-300 bg-white p-2 font-mono text-[11px] leading-relaxed text-zinc-700">
           <p class="text-zinc-500">// query</p>
           <pre>{JSON.stringify(previewData.query)}</pre>
           <p class="text-zinc-500">// form</p>
@@ -372,7 +367,7 @@
       <!-- BatchPanel resta MONTATO anche nei tab in cui non è visibile (class:hidden,
            non {#if}): cambiare tab non distrugge la coda in-session -->
       <div class={(panel !== "batch" && "hidden")} role="tabpanel" aria-label="Coda batch multi-composizione">
-        <h2 class="mb-2 text-sm font-semibold text-zinc-300">Batch multi-composizione</h2>
+        <h2 class="mb-2 text-sm font-semibold text-zinc-700">Batch multi-composizione</h2>
         <BatchPanel {form} mock={mockMode} onPick={pickAndRefresh} onToast={flash} />
       </div>
     </section>
@@ -387,8 +382,8 @@
     </section>
 
     <!-- ============================================ colonna JOB -->
-    <section class="min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3" aria-label="Job">
-      <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold text-zinc-300">
+    <section class="min-w-0 rounded-lg border border-zinc-200 bg-white p-3" aria-label="Job">
+      <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold text-zinc-700">
         job <span class="text-xs font-normal text-zinc-500">({jobs.length} · aggiornamento 10s)</span>
       </h2>
       {#if jobs.length === 0}
@@ -399,17 +394,17 @@
             <li>
               <button
                 class={selectedId === j.jobid
-                  ? "w-full rounded border border-cyan-600 bg-cyan-950/40 px-2 py-1 text-left text-xs text-cyan-100"
-                  : "w-full rounded border border-zinc-700 px-2 py-1 text-left text-xs text-zinc-300 hover:bg-zinc-800"}
+                  ? "w-full rounded border border-cyan-600 bg-cyan-50 px-2 py-1 text-left text-xs text-cyan-800"
+                  : "w-full rounded border border-zinc-300 px-2 py-1 text-left text-xs text-zinc-700 hover:bg-zinc-100"}
                 onclick={() => selectJob(j.jobid)}
                 aria-pressed={selectedId === j.jobid}
               >
                 <span class="font-mono">{j.jobid}</span>
-                <span class={`rounded px-1 text-[10px] ${j.state === "done" ? "bg-green-900 text-green-300" : j.state === "error" ? "bg-red-900 text-red-300" : "bg-zinc-700 text-zinc-200"}`}>
+                <span class={`rounded px-1 text-[10px] ${j.state === "done" ? "bg-green-100 text-green-800" : j.state === "error" ? "bg-red-100 text-red-800" : "bg-zinc-200 text-zinc-700"}`}>
                   {(j.state ?? "?")}
                 </span>
                 {#if j.label}
-                  <span class="ml-1 text-zinc-400">{j.label}</span>
+                  <span class="ml-1 text-zinc-600">{j.label}</span>
                 {/if}
               </button>
             </li>
@@ -418,8 +413,8 @@
       {/if}
 
       {#if record && status}
-        <div class="rounded border border-zinc-700 bg-black/40 p-2 text-xs text-zinc-300" aria-live="polite">
-          <p class="mb-1 font-semibold text-zinc-200">dettaglio · {selectedId}</p>
+        <div class="rounded border border-zinc-300 bg-white/50 p-2 text-xs text-zinc-700" aria-live="polite">
+          <p class="mb-1 font-semibold text-zinc-700">dettaglio · {selectedId}</p>
           <dl class="mb-2 grid grid-cols-2 gap-x-3 gap-y-0.5">
             <dt class="text-zinc-500">stato</dt>
             <dd>{status.status ?? "?"}</dd>
@@ -432,7 +427,7 @@
           </dl>
           <div class="flex flex-wrap gap-2">
             <button
-              class="rounded border border-zinc-600 px-2 py-1 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+              class="rounded border border-zinc-600 px-2 py-1 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
               onclick={() => fetchJob(selectedId)}
               disabled={busy || status.status !== "done"}
               aria-disabled={busy || status.status !== "done"}
@@ -440,7 +435,7 @@
               Scarica e estrai
             </button>
             <button
-              class="rounded border border-zinc-600 px-2 py-1 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+              class="rounded border border-zinc-600 px-2 py-1 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
               onclick={() => cloneToForm(record)}
             >
               Clona nel form
@@ -448,12 +443,12 @@
           </div>
           {#if files.length}
             <details class="mt-2">
-              <summary class="cursor-pointer text-zinc-400">file estratti ({files.length})</summary>
-              <ul class="mt-1 max-h-40 space-y-0.5 overflow-auto font-mono text-[11px] text-zinc-400">
+              <summary class="cursor-pointer text-zinc-600">file estratti ({files.length})</summary>
+              <ul class="mt-1 max-h-40 space-y-0.5 overflow-auto font-mono text-[11px] text-zinc-600">
                 {#each files as f (f.name)}
                   <li class="flex justify-between gap-2" style="padding-left: {0.75 * Math.max(0, f.depth - 1)}rem">
                     {#if f.name.endsWith('.pdb') || f.name.endsWith('.txt') || f.name.endsWith('.top')}
-                      <a href={`/api/files/${selectedId}/${f.name}`} target="_blank" rel="noreferrer" class="truncate underline decoration-dotted hover:text-cyan-300">{f.name}</a>
+                      <a href={`/api/files/${selectedId}/${f.name}`} target="_blank" rel="noreferrer" class="truncate underline decoration-dotted hover:text-cyan-700">{f.name}</a>
                     {:else}
                       <span class="truncate">{f.name}</span>
                     {/if}
@@ -475,8 +470,8 @@
   {#if toast}
     <div
       class={toast.kind === "err"
-        ? "fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded px-4 py-2 text-sm shadow-lg bg-red-950 text-red-100"
-        : "fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded px-4 py-2 text-sm shadow-lg bg-emerald-950 text-emerald-100"}
+        ? "fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded px-4 py-2 text-sm shadow-lg bg-red-100 text-red-800 border border-red-300"
+        : "fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded px-4 py-2 text-sm shadow-lg bg-emerald-100 text-emerald-800 border border-emerald-300"}
       role="status"
     >
       {toast.text}

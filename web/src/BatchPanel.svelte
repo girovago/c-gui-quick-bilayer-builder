@@ -215,16 +215,16 @@
         <li
           class={`rounded border p-2 ${
             row.status === "error"
-              ? "border-red-800 bg-red-950/30"
+              ? "border-red-800 bg-red-50"
               : i === activeIdx
-                ? "border-cyan-700 bg-cyan-950/30"
-                : "border-zinc-700"
+                ? "border-cyan-400 bg-cyan-50"
+                : "border-zinc-300"
           }`}
         >
           <div class="mb-1.5 flex items-center gap-2">
             <span class="text-[11px] text-zinc-500">#{i + 1}</span>
             <input
-              class="w-28 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              class="w-28 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-xs text-zinc-800 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
               value={row.label}
               oninput={(e) => (row.label = e.target.value)}
               placeholder={`batch-${i + 1}`}
@@ -235,19 +235,19 @@
             <span
               class={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${
                 row.status === "error"
-                  ? "bg-red-900 text-red-300"
+                  ? "bg-red-100 text-red-800"
                   : row.status === "done" || row.status === "fetched"
-                    ? "bg-green-900 text-green-300"
+                    ? "bg-green-100 text-green-800"
                     : row.status === "queued"
-                      ? "bg-zinc-700 text-zinc-200"
-                      : "bg-cyan-900 text-cyan-300"
+                      ? "bg-zinc-200 text-zinc-700"
+                      : "bg-cyan-100 text-cyan-800"
               }`}
             >
               {STATUS_LABEL[row.status] ?? row.status}
             </span>
             <button
               type="button"
-              class="rounded px-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-40"
+              class="rounded px-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-40"
               onclick={() => removeRow(i)}
               aria-label={`rimuovi riga ${i + 1}`}
               disabled={runState === "running"}
@@ -262,8 +262,8 @@
               <textarea
                 id={`b-upper-${row.id}`}
                 rows="1"
-                class="w-full rounded border bg-zinc-950 px-1.5 py-0.5 font-mono text-[11px] text-zinc-100 focus:outline-none disabled:opacity-50 {validSide(row, 'upper')
-                  ? 'border-zinc-700'
+                class="w-full rounded border bg-white px-1.5 py-0.5 font-mono uppercase text-[11px] text-zinc-800 focus:outline-none disabled:opacity-50 {validSide(row, 'upper')
+                  ? 'border-zinc-300'
                   : 'border-red-600'}"
                 bind:value={row.upper}
                 disabled={runState === "running"}
@@ -274,8 +274,8 @@
               <textarea
                 id={`b-lower-${row.id}`}
                 rows="1"
-                class="w-full rounded border bg-zinc-950 px-1.5 py-0.5 font-mono text-[11px] text-zinc-100 focus:outline-none disabled:opacity-50 {validSide(row, 'lower')
-                  ? 'border-zinc-700'
+                class="w-full rounded border bg-white px-1.5 py-0.5 font-mono uppercase text-[11px] text-zinc-800 focus:outline-none disabled:opacity-50 {validSide(row, 'lower')
+                  ? 'border-zinc-300'
                   : 'border-red-600'}"
                 bind:value={row.lower}
                 disabled={runState === "running"}
@@ -290,14 +290,14 @@
               type="number"
               step="0.1"
               min="0.5"
-              class="w-20 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 disabled:opacity-50"
+              class="w-20 rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-xs text-zinc-800 disabled:opacity-50"
               bind:value={row.margin}
               disabled={runState === "running"}
             />
             {#if row.jobid}
               <button
                 type="button"
-                class="ml-auto font-mono text-[10px] text-zinc-400 underline decoration-dotted hover:text-cyan-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                class="ml-auto font-mono text-[10px] text-zinc-600 underline decoration-dotted hover:text-cyan-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
                 onclick={() => onPick(row.jobid)}
                 title="apri il job nella lista a destra"
               >
@@ -307,12 +307,12 @@
           </div>
 
           {#if !rowValid(row)}
-            <p class="mt-1 text-[10px] text-amber-400">
+            <p class="mt-1 text-[10px] text-amber-600">
               riga non valida: serve LIPID=count (es. POPC=64) su upper e lower, margin &gt; 0 — più
               lipidi separati da «;»
             </p>
           {:else if row.err}
-            <p class="mt-1 text-[10px] text-red-300">{row.err}</p>
+            <p class="mt-1 text-[10px] text-red-700">{row.err}</p>
           {/if}
         </li>
       {/each}
@@ -322,14 +322,14 @@
   <div class="mb-3 flex items-center gap-2">
     <button
       type="button"
-      class="rounded border border-zinc-600 px-2.5 py-1 text-xs text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+      class="rounded border border-zinc-300 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
       onclick={() => addRow()}
       aria-label="aggiungi riga al batch"
       disabled={runState === "running"}
     >
       + aggiungi riga
     </button>
-    <label class="flex items-center gap-1 text-xs text-zinc-300">
+    <label class="flex items-center gap-1 text-xs text-zinc-700">
       <input type="checkbox" class="accent-cyan-500" bind:checked={autoFetch} />
       scarica ed estrai quando finito
     </label>
@@ -338,7 +338,7 @@
   <div class="flex items-center gap-2">
     <button
       type="button"
-      class="rounded bg-cyan-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
+      class="rounded bg-cyan-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-600"
       onclick={start}
       disabled={!canStart}
       aria-disabled={!canStart}
@@ -348,7 +348,7 @@
     {#if runState === "running"}
       <button
         type="button"
-        class="rounded border border-red-700 px-3 py-1.5 text-sm text-red-200 hover:bg-red-950/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+        class="rounded border border-red-400 px-3 py-1.5 text-sm text-red-800 hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
         onclick={stopRun}
       >
         Ferma
@@ -356,7 +356,7 @@
     {:else if runState === "stopped" && firstPending >= 0}
       <button
         type="button"
-        class="rounded border border-cyan-700 px-3 py-1.5 text-sm text-cyan-200 hover:bg-cyan-950/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+        class="rounded border border-cyan-400 px-3 py-1.5 text-sm text-cyan-800 hover:bg-cyan-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
         onclick={start}
       >
         Riprendi dalla riga {firstPending + 1} (salta le completate)
@@ -366,7 +366,7 @@
 
   <p
     class={`mt-2 min-h-[2.5rem] text-xs leading-snug ${
-      runState === "stopped" ? "text-red-300" : "text-zinc-400"
+      runState === "stopped" ? "text-red-700" : "text-zinc-600"
     }`}
     aria-live="polite"
   >
