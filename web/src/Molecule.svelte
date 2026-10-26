@@ -16,15 +16,35 @@
   let panelOpen = $state(true); // pannello controlli (⚙ collassa su schermi stretti)
   let hint = $state(false); // pillola hint mouse (5s dal mount)
   let note = $state(""); // messaggio onesto su stile non applicabile (es. cartoon su lipidi puri)
+  let hasSolvent = $state(true); // il sistema corrente ha acqua/ioni (il toggle si disabilita se no)
   let lastLoaded = null;
   let lastRequested = null; // il check corre dopo l'await: evita la race del cambio job
   let waterRepr = null;
   let compRef = null; // componente corrente in scena (sample o job reale)
   let mainRepr = null; // UNA sola rappresentazione principale (il solvente è a parte)
 
-  const SELE_CLEAN = "not (water or resname SOD POT CLA NA K ION)";
-  const SELE_SOLVENT = "water or resname SOD POT CLA NA K ION";
+  // TRAPPOLA verificata dal vivo (26/10, NGL vendORIZZATO): nelle selezioni le
+  // keyword (`resname`, `element`…) tornano il set COMPLETO e — peggio — un
+  // resname elencato che NON esiste nella struttura avvelena l'intera selezione
+  // portandola al set completo (es. 'not (TIP3C TIP ...)' → tutti gli atomi).
+  // Quindi niente selezioni statiche: i nomi solvente vengono presi SOLO
+  // dall'intersezione tra un elenco canonico e i resname davvero presenti
+  // (letti da structure.eachResidue), e se non ce ne sono il toggle si disabilita.
+  const SOLVENT_CANON = new Set([
+    "TIP3", "TIP3C", "TIP", "TIPJ", "HOH", "WAT", "SOL", // acqua (CHARMM/PDB)
+    "SOD", "POT", "CLA", "CAL", "ZN", "ZN2", "MG", "LI", "NA", "K", "CL", // ioni CHARMM
+  ]);
   const SAMPLE = "/api/sample/pdb";
+
+  function solventResNames(st) {
+    try {
+      const present = new Set();
+      st.eachResidue(function (rp) { if (rp.resname) present.add(rp.resname); });
+      return [...SOLVENT_CANON].filter((n) => present.has(n)).sort();
+    } catch {
+      return [];
+    }
+  }
 
   onMount(() => {
     if (!window.NGL) {
@@ -47,19 +67,31 @@
     };
   });
 
-  function mainParams(name) {
-    if (name === "ball+stick") return { sele: SELE_CLEAN }; // NGL usa il «+», non il tratteggio
-    if (name === "licorice") return { sele: SELE_CLEAN, radius: 0.25 };
-    if (name === "cartoon") return { sele: SELE_CLEAN };
-    return { sele: SELE_CLEAN, radius: "schematic" }; // spacefill (default)
+  function mainParams(name, comp) {
+    // esclusione solvente dinamica (vedi nota SOLVENT_CANON in alto): solo
+    // resname presenti; se il sistema non ha solvente → sele vuota = tutto
+    const names = comp ? solventResNames(comp.structure) : [];
+    const clean = names.length ? `not (${names.join(" ")})` : "";
+    // cartoon: solo 'protein' (keyword che funziona e già esclude il solvente)
+    if (name === "ball+stick") return clean ? { sele: clean } : {}; // NGL usa il «+», non il tratteggio
+    if (name === "licorice") return clean ? { sele: clean, radius: 0.25 } : { radius: 0.25 };
+    if (name === "cartoon") return { sele: "protein" };
+    const p = { radius: "schematic" }; // spacefill (default)
+    if (clean) p.sele = clean;
+    return p;
   }
 
   function hasProtein() {
-    // cartoon disegna il backbone proteico: conta atomi di backbone reali
-    // (il solo 'protein' matcha catene finte tipo le code GLY/OLE dei lipidi)
+    // cartoon disegna il backbone proteico: conta atomi di backbone reali con
+    // getAtomSet (le keyword qui funzionano: 'protein' → sottoinsieme corretto;
+    // il solo resname-based matchava le code finte GLY/OLE dei lipidi)
     try {
       if (!compRef || !compRef.structure) return false;
-      return compRef.structure.getAtomIndices(new window.NGL.Selection("protein and backbone")).length > 0;
+      const st = compRef.structure;
+      const bs = st.getAtomSet(new window.NGL.Selection("protein and backbone"));
+      let n = 0;
+      for (let i = 0; i < st.atomCount; i++) if (bs.isSet(i)) n++;
+      return n > 0;
     } catch {
       return false;
     }
@@ -77,13 +109,13 @@
         return;
       }
       if (mainRepr) compRef.removeRepresentation(mainRepr); // SOLO la principale
-      mainRepr = compRef.addRepresentation(name, mainParams(name));
+      mainRepr = compRef.addRepresentation(name, mainParams(name, compRef));
     } catch (e) {
       // stile non applicabile al sistema in scena (es. cartoon su lipidi puri
       // in qualche build): torniamo al precedente, la scena resta valida
       style = prev;
       try {
-        if (compRef) mainRepr = compRef.addRepresentation(prev, mainParams(prev));
+        if (compRef) mainRepr = compRef.addRepresentation(prev, mainParams(prev, compRef));
       } catch {
         mainRepr = null;
       }
@@ -96,6 +128,10 @@
 
   function decorate(comp) {
     compRef = comp;
+    // solvente/ioni veri della STRUTTURA corrente: se non ce ne sono il
+    // toggle acqua/ioni si disabilita (niente riferimenti fantasma)
+    const names = solventResNames(comp.structure);
+    hasSolvent = names.length > 0;
     let effStyle = style;
     if (style === "cartoon" && !hasProtein()) {
       // nuovo sistema senza backbone (es. si torna al sample): il cartoon
@@ -104,12 +140,17 @@
       style = "spacefill";
       note = "cartoon non applicabile a questo sistema (nessuna proteina): spacefill attivo.";
     }
-    mainRepr = comp.addRepresentation(effStyle, mainParams(effStyle));
-    waterRepr = comp.addRepresentation("spacefill", {
-      sele: SELE_SOLVENT,
-      radius: 0.3,
-      opacity: 0.6,
-    });
+    mainRepr = comp.addRepresentation(effStyle, mainParams(effStyle, comp));
+    if (hasSolvent) {
+      waterRepr = comp.addRepresentation("spacefill", {
+        sele: names.join(" "),
+        radius: 0.3,
+        opacity: 0.6,
+      });
+    } else {
+      waterRepr = null;
+      showWater = false;
+    }
     if (waterRepr) waterRepr.setVisibility(showWater);
     comp.autoView();
   }
@@ -140,8 +181,9 @@
   }
 
   function toggleWater() {
+    if (!hasSolvent || !waterRepr) return;
     showWater = !showWater;
-    if (waterRepr) waterRepr.setVisibility(showWater);
+    waterRepr.setVisibility(showWater);
   }
 
   $effect(() => {
@@ -246,9 +288,12 @@
   >
     <input
       type="checkbox"
-      class="accent-cyan-500"
+      class="accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
       name="show-water"
       aria-label="Mostra acqua e ioni"
+      aria-disabled={!hasSolvent}
+      title={hasSolvent ? "mostra/nascondi acqua e ioni" : "questo sistema non contiene solvente"}
+      disabled={!hasSolvent}
       checked={showWater}
       onchange={toggleWater}
     />
