@@ -99,11 +99,87 @@ def extract(normalized: Normalized, target: Path) -> list[str]:
 
 
 def safe_extract_file(archive_path: Path, target: Path) -> list[str]:
-    """Legge un archivio da disco, lo normalizza e lo estrae in sicurezza."""
+    """Estrae un archivio da disco in stream (senza caricarlo tutto in RAM).
+
+    Prima ``sanitize_file`` verifica/ritaglia la coda ASCII a chunk,
+    poi ``tarfile.open("r:gz")`` legge dal disco: solo i singoli membri
+    (piccoli) vengono tenuti in memoria durante l'estrazione.
+    """
     archive_path = Path(archive_path)
     if not archive_path.is_file():
         raise ArchiveError(f"archivio non trovato: {archive_path}")
-    return extract(normalize(archive_path.read_bytes()), target)
+    sanitize_file(archive_path)
+    try:
+        with tarfile.open(archive_path, "r:gz") as tar:
+            members = tar.getmembers()
+            for member in members:
+                _check_member(member)
+            tar.extractall(target, members=members, filter="data")
+            return [m.name for m in members if m.isfile()]
+    except ArchiveError:
+        raise
+    except (tarfile.TarError, OSError) as exc:
+        raise ArchiveError(f"tar non estraibile: {exc}") from exc
+
+
+#: la coda reale del server sono poche cifre ASCII: oltre è garbage
+_TAIL_LIMIT = 4096
+
+
+def sanitize_file(path: Path) -> int:
+    """Verifica da disco lo stream gzip e ritaglia la coda ASCII in place.
+
+    Equivalente in risultato a ``normalize`` ma a chunk (1 MiB): l'archivio
+    non passa mai intero per la RAM. Restituisce la lunghezza del payload
+    gzip valido. Semantica identica: coda assente ok; coda di sole cifre
+    (eventuali ``\\x00`` ai lati) accettata e rimossa; qualunque altra coda
+    (o assenza di fine stream) → ``ArchiveError``. Unica differenza difensiva:
+    code oltre ``_TAIL_LIMIT`` byte (irrealistiche) vengono rifiutate.
+    """
+    path = Path(path)
+    dec = zlib.decompressobj(wbits=31)
+    eof = False
+    end_offset = 0
+    trailing: list[bytes] = []
+    with path.open("rb") as fh:
+        # peek (non consume): il decompressore vuole ricevere il magic in input
+        if fh.peek(2)[:2] != b"\x1f\x8b":
+            raise ArchiveError("non è un gzip: manca il magic number 1f 8b")
+        consumed = 0
+        while True:
+            chunk = fh.read(1 << 20)
+            if not chunk:
+                break
+            if eof:
+                trailing.append(chunk)
+                if sum(len(t) for t in trailing) > _TAIL_LIMIT:
+                    raise ArchiveError(
+                        f"coda inattesa dopo il gzip (> {_TAIL_LIMIT} byte): archivio sospetto"
+                    )
+                continue
+            consumed += len(chunk)
+            try:
+                dec.decompress(chunk)
+            except zlib.error as exc:
+                raise ArchiveError(f"gzip corrotto o troncato: {exc}") from exc
+            if dec.eof:
+                eof = True
+                end_offset = consumed - len(dec.unused_data)
+                if dec.unused_data:
+                    trailing.append(dec.unused_data)
+    if not eof:
+        raise ArchiveError("gzip incompleto: stream terminato prima della fine")
+    tail = b"".join(trailing)
+    # condizione identica a normalize (una coda di soli \x00 è rifiutata):
+    if tail and not tail.strip(b"\x00").isdigit():
+        raise ArchiveError(
+            f"coda inattesa dopo il gzip ({len(tail)} byte, inizio {tail[:32]!r}): "
+            "archivio sospetto"
+        )
+    if trailing:
+        with path.open("r+b") as fh:
+            fh.truncate(end_offset)
+    return end_offset
 
 
 def sha256_file(path: Path) -> str:

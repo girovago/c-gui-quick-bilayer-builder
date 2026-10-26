@@ -12,6 +12,7 @@
   let message = $state("");
   let showWater = $state(false);
   let lastLoaded = null;
+  let lastRequested = null; // il check corre dopo l'await past di race del cambio job
   let waterRepr = null;
 
   const SELE_CLEAN = "not (water or resname SOD POT CLA NA K ION)";
@@ -32,6 +33,8 @@
   });
 
   async function load(id) {
+    if (!stage) return;
+    lastRequested = id;
     stage.removeAllComponents();
     waterRepr = null;
     state = "loading";
@@ -40,6 +43,7 @@
         `/api/files/${id}/system/step1_pdbreader.pdb`,
         { defaultRepresentation: false }
       );
+      if (id !== lastRequested) return; // job cambiato durante l'await: scarta
       comp.addRepresentation("spacefill", { sele: SELE_CLEAN, radius: "schematic" });
       waterRepr = comp.addRepresentation("spacefill", {
         sele: SELE_SOLVENT,
@@ -50,6 +54,7 @@
       comp.autoView();
       state = "ready";
     } catch (e) {
+      if (id !== lastRequested) return; // race: il messaggio d'errore vale solo per l'ultima richiesta
       state = "error";
       message = String(e?.message ?? e);
     }

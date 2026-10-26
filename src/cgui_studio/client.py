@@ -18,6 +18,7 @@ Comportamenti derivati da verifiche reali (vedi SOURCES.md), non da assunzioni:
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -216,21 +217,61 @@ class Client:
         return JobStatus.from_json(payload, jobid=jobid)
 
     def download(self, jobid: str, dest: Path) -> Path:
-        """Scarica l'archivio del job in ``dest`` (grezzo, coda ASCII inclusa)."""
+        """Scarica l'archivio del job in ``dest`` (grezzo, coda ASCII inclusa).
+
+        Streaming (``stream`` + ``iter_bytes`` 1MiB): l'archivio reale può
+        pesare centinaia di MB e non deve finire tutta in RAM. Il probe 5xx
+        e la scrittura su ``.part`` + rename evitano file troncati/garbage.
+        """
         dest = Path(dest)
-        resp = self._request("GET", "/download", params={"jobid": jobid}, timeout=600.0)
-        if resp.status_code != 200:
-            raise JobError(
-                f"download fallito (HTTP {resp.status_code}) per il job {jobid}: {resp.text[:200]}"
-            )
-        content = resp.content
-        if not content.startswith(b"\x1f\x8b"):
-            raise JobError(
-                f"il download non è un gzip (probabile pagina di errore HTML): {content[:120]!r}"
-            )
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(content)
-        return dest
+        last_error: str = "errore sconosciuto"
+        for attempt in range(max(1, self.max_retries)):
+            try:
+                with self._http.stream(
+                    "GET",
+                    f"{self.base_url}/download",
+                    params={"jobid": jobid},
+                    headers={"Authorization": f"Bearer {self.token()}"},
+                    timeout=600.0,
+                ) as resp:
+                    if resp.status_code in RETRY_STATUS:
+                        last_error = f"HTTP {resp.status_code} da {self.base_url}/download"
+                        if attempt < self.max_retries - 1:
+                            time.sleep(0.5 * (2**attempt))
+                            continue
+                    elif resp.status_code == 401:
+                        body = resp.read().decode(errors="replace")[:300]
+                        raise ApiError(f"token rifiutato (HTTP 401): {body}", 401, body)
+                    elif resp.status_code != 200:
+                        raise JobError(
+                            f"download fallito (HTTP {resp.status_code}) per il job {jobid}"
+                        )
+                    else:
+                        chunks = resp.iter_bytes(1 << 20)
+                        first = next(chunks, b"")
+                        if not first.startswith(b"\x1f\x8b"):
+                            raise JobError(
+                                "il download non è un gzip (probabile pagina di errore HTML): "
+                                f"{first[:120]!r}"
+                            )
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        tmp = dest.with_name(dest.name + ".part")
+                        try:
+                            with tmp.open("wb") as fh:
+                                fh.write(first)
+                                for chunk in chunks:
+                                    fh.write(chunk)
+                            os.replace(tmp, dest)
+                        finally:
+                            tmp.unlink(missing_ok=True)
+                        return dest
+            except httpx.HTTPError as exc:  # rete / stream interrotto a metà
+                last_error = f"rete non raggiungibile ({self.base_url}/download): {exc}"
+                if attempt < self.max_retries - 1:
+                    time.sleep(0.5 * (2**attempt))
+                    continue
+            raise ApiError(last_error)
+        raise ApiError(last_error)  # irraggiungibile: il loop termina con raise
 
     def wait(
         self,

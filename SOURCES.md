@@ -103,11 +103,11 @@ Automazione via browser, senza licenza esplicita. **Non integrato.**
 
 ## 5. Attribuzione NGL (vendored)
 
-`web/vendor/ngl.js` è una **copia vendORIZED** di [NGL View](https://github.com/nglviewer/ngl)
+`web/public/vendor/ngl.js` è una **copia vendORIZED** di [NGL View](https://github.com/nglviewer/ngl)
 (nglviewer, Alexander Rose et al.), **MIT**, versione `2.5.0` dalla dist
 ufficiale del pacchetto npm `ngl` (UMD standalone con three.js incluso). La
 copia è servita localmente da FastAPI/Vite (nessun CDN). Licenza originale in
-`web/vendor/NGL-LICENSE`.
+`web/public/vendor/NGL-LICENSE`.
 
 ## 6. Licenza
 

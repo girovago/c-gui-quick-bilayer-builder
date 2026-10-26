@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import io
 import json
 import tarfile
@@ -300,6 +301,45 @@ def test_download_404_raises_job_error(tmp_path):
 
     with pytest.raises(JobError, match="404"):
         mock_client(handler, token="t").download("5", tmp_path / "nope.tgz")
+
+
+def test_download_503_retries_then_success(tmp_path, sleep_noop):
+    calls = {"n": 0}
+
+    def handler(req):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(503, text="busy")
+        return httpx.Response(200, content=make_tar_bytes({"README": b"x"}))
+
+    out = mock_client(handler, token="t", max_retries=3).download("5", tmp_path / "a.tgz")
+    assert out.read_bytes().startswith(b"\x1f\x8b")
+    with tarfile.open(out, "r:gz") as tar:
+        assert tar.extractfile("README").read() == b"x"
+    assert calls["n"] == 3
+
+
+def test_download_streaming_empty_body_not_gzip(tmp_path):
+    def handler(req):
+        return httpx.Response(200, text="")
+
+    with pytest.raises(JobError, match="gzip"):
+        mock_client(handler, token="t").download("5", tmp_path / "a.tgz")
+
+
+def test_download_keeps_ascii_tail_and_fetch_extracts(home):
+    """sha256 copre il raw CON coda (provenance), poi sanitize la ritaglia dal tar."""
+    payload = make_tar_bytes({"README": b"x"}) + b"98765"
+
+    def handler(req):
+        if req.url.path.endswith("/check_status"):
+            return _json({"jobid": "7", "status": "done", "hasTarFile": True})
+        return httpx.Response(200, content=payload)
+
+    result = fetch_job(mock_client(handler, token="t"), "7", home / "results")
+    assert result["sha256"] == hashlib.sha256(payload).hexdigest()  # calcolata prima del ritaglio
+    assert result["tar"].read_bytes() == payload[: -len(b"98765")]  # coda rimossa in place
+    assert (result["system_dir"] / "README").read_bytes() == b"x"
 
 
 def test_fetch_job_slugifies_label(home):

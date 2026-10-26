@@ -1,6 +1,7 @@
 <script>
   // App a 3 colonne: form wizard | vista 3D | lista job + dettaglio.
-  // Su schermo stretto le colonne si impilano. Polling: lista 10s, dettaglio 2s.
+  // Su schermo stretto le colonne si impilano. Polling: lista 10s, dettaglio
+  // adattivo (2s MOCK/running fresco, 20s altrimenti; pausa in background).
   import { onMount } from "svelte";
   import Molecule from "./Molecule.svelte";
   import { api, formToPayload, isFormValid, parseLipidText, lipidRe } from "./api.js";
@@ -66,17 +67,27 @@
     }
     try {
       detail = await api(`/api/jobs/${selectedId}`);
-      if (detail.record.outdir) {
-        try {
-          files = (await api(`/api/files/${selectedId}`)).files ?? [];
-        } catch {
-          files = [];
-        }
-      } else {
-        files = [];
-      }
     } catch {
       /* job non interrogabile ora (404/token): tenant lo stato precedente, il polling riprova */
+      return;
+    }
+    // Albero file: solo quando cambia outdir/archive_sha256 (o dopo un fetch
+    // fallito). Niente 1 GET files extra a ogni tick.
+    const key = filesKey(detail);
+    if (!key) {
+      files = [];
+      filesDirty = true;
+      return;
+    }
+    if (filesDirty && key !== lastFilesKey) {
+      lastFilesKey = key;
+      try {
+        files = (await api(`/api/files/${selectedId}`)).files ?? [];
+        filesDirty = false;
+      } catch {
+        files = [];
+        lastFilesKey = ""; // il prossimo fetch riuscito riprova l'albero
+      }
     }
   }
 
@@ -144,21 +155,79 @@
     selectedId = id;
     detail = null;
     files = [];
+    filesDirty = true;
+  }
+
+  // ------------------------------------------------------------------ polling
+  // Fix verifier (BUG 2): niente martelletta fissa a 2s sull'API reale.
+  // - pausa completa della tab: document.hidden (visibilitychange);
+  // - intervallo adattivo: 2s solo in MOCK o se il job è "running" da <2min,
+  //   altrimenti 20s;
+  // - l'albero /api/files/{id} si ricarica solo al cambio di
+  //   outdir/archive_sha256 o dopo un fetch fallito (filesKey/filesDirty).
+  let lastFilesKey = "";
+  let filesDirty = true;
+  let runningSince = null; // epoch ms da cui il job selezionato è "running"
+  let detailTimer = null;
+  let jobsTimer = null;
+
+  function filesKey(d) {
+    const r = d?.record;
+    return r?.outdir ? `${r.outdir}|${r.archive_sha256 ?? ""}` : "";
+  }
+
+  function detailInterval() {
+    if (mockMode) return 2000;
+    const st = detail?.status?.status;
+    if (st === "running") {
+      if (runningSince === null) runningSince = Date.now();
+      return Date.now() - runningSince < 120_000 ? 2000 : 20000;
+    }
+    runningSince = null;
+    return 20000;
+  }
+
+  function tickDetail() {
+    refreshDetail().finally(scheduleDetail);
+  }
+  function tickJobs() {
+    refreshJobs().finally(scheduleJobs);
+  }
+  function scheduleDetail() {
+    clearTimeout(detailTimer);
+    if (document.hidden) return; // tab in background: nessuna chiamata
+    detailTimer = setTimeout(tickDetail, detailInterval());
+  }
+  function scheduleJobs() {
+    clearTimeout(jobsTimer);
+    if (document.hidden) return;
+    jobsTimer = setTimeout(tickJobs, 10000);
+  }
+  function onVisibility() {
+    if (document.hidden) return; // tab nascosta: i timer restano fermi
+    // tab tornata in primo piano: aggiorna subito e riparte il ciclo
+    refreshDetail();
+    scheduleDetail();
+    refreshJobs();
+    scheduleJobs();
   }
 
   onMount(() => {
     refreshJobs();
-    api("/api/ping").then((p) => (mockMode = Boolean(p.mock))).catch(() => {});
-  });
-
-  // polling: lista ogni 10s, dettaglio del job selezionato ogni 2s
-  $effect(() => {
     refreshDetail();
-    const t1 = setInterval(refreshDetail, 2000);
-    const t2 = setInterval(refreshJobs, 10000);
+    api("/api/ping")
+      .then((p) => {
+        mockMode = Boolean(p.mock);
+        scheduleDetail(); // l'intervallo va ricalcolato ora che mock è noto
+      })
+      .catch(() => {});
+    document.addEventListener("visibilitychange", onVisibility);
+    scheduleJobs();
+    scheduleDetail();
     return () => {
-      clearInterval(t1);
-      clearInterval(t2);
+      clearTimeout(detailTimer);
+      clearTimeout(jobsTimer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   });
 </script>

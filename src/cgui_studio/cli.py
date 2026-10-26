@@ -398,7 +398,20 @@ def serve_cmd(
     if os.environ.get("CGUI_MOCK"):
         typer.secho("MOCK attivo: nessuna chiamata reale a charmm-gui.org", fg=typer.colors.CYAN)
     typer.echo(f"GUI su http://{host}:{port}")
-    webui.run(host=host, port=port)
+    # Sono solo una rilevazione preventiva (TOCTOU possibile ma raro):
+    # se la porta si libera/occupa nel mezzo vale il secondo controllo.
+    import socket as _socket
+
+    with _socket.socket() as probe:
+        probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind((host, port))
+        except OSError:
+            _die(f"porta {port} occupata: usa --port NNNN")
+    try:
+        webui.run(host=host, port=port)
+    except OSError as exc:
+        _die(f"porta {port} occupata: usa --port NNNN", str(exc))
 
 
 @app.command("doctor")

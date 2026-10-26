@@ -136,6 +136,9 @@ def _map_errors(mock: bool) -> Iterator[None]:
     except ApiError as exc:
         raise HTTPException(502, str(exc)) from exc
     except JobError as exc:
+        # Condivide deliberatamente il 409 con AuthError: per il frontend è lo
+        # stesso stato "transitorio, riprova" (job non pronto, fetch senza
+        # archivio, timeout di client.wait — incluso il FakeClient nella GUI).
         raise HTTPException(409, str(exc)) from exc
 
 
