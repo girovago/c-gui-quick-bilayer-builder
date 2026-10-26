@@ -47,6 +47,33 @@ def test_ping_mock(gui):
     assert t.json() == {"ok": True, "mock": True}
 
 
+def test_sample_pdb_route(gui):
+    """Struttura campione: PDB plausibile, header X-Sample, zero rete esterna."""
+    t = gui[0].get("/api/sample/pdb")
+    assert t.status_code == 200
+    assert t.headers.get("x-sample") == "true"
+    assert t.headers["content-type"].startswith("text/plain")
+    lines = t.text.splitlines()
+    atoms = [line for line in lines if line.startswith("ATOM")]
+    # ~128 lipidi + acqua + ioni: migliaia di atomi ATOM
+    assert 8000 <= len(atoms) <= 20000
+    assert atoms[0].startswith("ATOM")
+    assert atoms[1].startswith("ATOM")
+    # ~3 atomi testa POP per lipide: 128 lipidi totali (64+64)
+    assert sum(1 for ln in atoms if ln[17:20] == "POP") == 384
+    assert lines[-1] == "END"
+    # deterministico: due chiamate → stesso contenuto
+    assert t.text == gui[0].get("/api/sample/pdb").text
+
+
+def test_sample_pdb_does_not_touch_store(gui):
+    """La rotta campione non registra nulla né richiede il client."""
+    t, fake = gui
+    assert t.get("/api/sample/pdb").status_code == 200
+    assert t.get("/api/jobs").json() == []
+    assert not getattr(fake, "_t0", None)
+
+
 def test_submit_records_job(gui):
     t, _ = gui
     r = t.post("/api/jobs", json=_jobbody())

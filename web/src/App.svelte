@@ -4,6 +4,7 @@
   // adattivo (2s MOCK/running fresco, 20s altrimenti; pausa in background).
   import { onMount } from "svelte";
   import Molecule from "./Molecule.svelte";
+  import SpecSketch from "./SpecSketch.svelte";
   import { api, formToPayload, isFormValid, parseLipidText, lipidRe } from "./api.js";
 
   // ------------------------------------------------------------------ form state
@@ -335,6 +336,7 @@
 
     <!-- ============================================ colonna 3D -->
     <section class="min-w-0" aria-label="Vista 3D">
+      <SpecSketch {form} />
       <Molecule jobid={record?.outdir ? selectedId : null} />
       <p class="mt-1 text-xs text-zinc-500">
         {record ? `job ${selectedId}${record.outdir ? " · system/step1_pdbreader.pdb" : " · non ancora estratto"}` : "nessun job selezionato"}

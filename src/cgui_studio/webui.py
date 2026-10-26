@@ -11,6 +11,7 @@ Rotte (/api/*), tutte sincrone: Metro FastAPI in threadpool, il core è sync
 - ``GET  /api/files/{jobid}``           -> albero dei file estratti
 - ``GET  /api/files/{jobid}/{path..}``  -> file (text/binary; rifiuta ``..``/symlink)
 - ``POST /api/form-preview``            -> debug payload ``query/form`` della `Spec`
+- ``GET  /api/sample/pdb``              -> struttura campione locale (header ``X-Sample``)
 
 Errori coerenti: 404 job inesistente / non estratto, 409 token assente o job non
 pronto, 502 errori API a monte (messaggio del client), 422 errori del validator di
@@ -25,7 +26,7 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -34,7 +35,7 @@ from .client import ApiError, AuthError, Client, JobError, fetch_job
 from .models import JobRecord, JobStatus, Spec
 from .paths import default_results_dir
 from .store import JobStore
-from .webmock import FakeClient
+from .webmock import FakeClient, bilayer_pdb_bytes
 
 #: estensioni servite da /api/files come text/plain (il resto: octet-stream)
 _TEXT_SUFFIXES = frozenset(
@@ -146,6 +147,19 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     @app.get("/api/ping")
     def ping() -> dict[str, Any]:
         return {"ok": True, "mock": app.state.mock}
+
+    @app.get("/api/sample/pdb")
+    def sample_pdb() -> Response:
+        """Struttura campione generata in locale (zero rete esterna).
+
+        Stesso bilayer finto del mock (128 lipidi: 64+64,acqua e ioni): serve
+        da demo per la vista 3D quando non c'è un sistema reale estratto.
+        """
+        return Response(
+            content=bilayer_pdb_bytes(lipids_side=8),
+            media_type="text/plain",
+            headers={"X-Sample": "true", "Cache-Control": "no-store"},
+        )
 
     @app.post("/api/jobs")
     def submit(payload: JobInput) -> dict[str, Any]:
