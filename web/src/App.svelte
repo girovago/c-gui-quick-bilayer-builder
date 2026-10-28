@@ -44,6 +44,21 @@
 
   const record = $derived(detail?.record ?? null);
   const status = $derived(detail?.status ?? null);
+  // confronto affiancato: secondo sistema mostrato accanto al job selezionato
+  let compareJobId = $state(null);
+  const compareableJobs = $derived(
+    jobs.filter((j) => String(j.jobid ?? "").startsWith("local-") || (j.state === "done" && j.outdir))
+  );
+  function startCompare() {
+    // default: l'ultimo job locale disponibile; se non ci sono, l'ultimo confrontabile
+    const locals = compareableJobs.filter((j) => String(j.jobid ?? "").startsWith("local-"));
+    const last = locals.at(-1) ?? compareableJobs.at(-1);
+    if (!last) {
+      flash("error", "nessun job finito da confrontare: genera un build locale o estrai un job");
+      return;
+    }
+    compareJobId = last.jobid;
+  }
   const upperOk = $derived(
     form.membtype !== "" || (parseLipidText(form.upper).every((l) => lipidRe.test(l)) && parseLipidText(form.lower).every((l) => lipidRe.test(l)))
   );
@@ -427,9 +442,54 @@
     <!-- ============================================ colonna 3D -->
     <section class="min-w-0" aria-label="Vista 3D">
       <SpecSketch {form} />
-      <Molecule jobid={record?.outdir ? selectedId : null} />
+      <div class="mb-1 flex items-center gap-2 text-xs text-zinc-700">
+        {#if compareJobId}
+          <label for="f-compare" class="flex items-center gap-1">
+            <span class="text-zinc-500">secondo sistema:</span>
+            <select
+              id="f-compare"
+              bind:value={compareJobId}
+              class="max-w-48 rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800"
+              title="scegli il job da mostrare a destra (job locali finiti)"
+            >
+              {#each compareableJobs as j (j.jobid)}
+                <option value={j.jobid}>{j.jobid}{j.label ? ` · ${j.label}` : ""}</option>
+              {/each}
+            </select>
+          </label>
+          <button
+            type="button"
+            class="rounded border border-zinc-300 px-2 py-0.5 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+            onclick={() => (compareJobId = null)}
+            title="torna alla vista singola a tutto canvas"
+          >
+            Rimuovi confronto
+          </button>
+        {:else}
+          <button
+            type="button"
+            class="rounded border border-zinc-300 px-2 py-0.5 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+            onclick={startCompare}
+            title="mostra due strutture affiancate (es. POPC puro vs POPC+CHOL)"
+          >
+            Confronta…
+          </button>
+        {/if}
+      </div>
+      {#if compareJobId}
+        <div class="grid grid-cols-2 gap-2" aria-label="Confronto affiancato">
+          <Molecule jobid={record?.outdir ? selectedId : null} />
+          <Molecule jobid={compareJobId} />
+        </div>
+      {:else}
+        <Molecule jobid={record?.outdir ? selectedId : null} />
+      {/if}
       <p class="mt-1 text-xs text-zinc-500">
-        {record ? `job ${selectedId}${record.outdir ? " · system/step1_pdbreader.pdb" : " · non ancora estratto"}` : "nessun job selezionato"}
+        {#if compareJobId}
+          confronto: job {record?.outdir ? selectedId : "—"} + job {compareJobId}
+        {:else}
+          {record ? `job ${selectedId}${record.outdir ? " · system/step1_pdbreader.pdb" : " · non ancora estratto"}` : "nessun job selezionato"}
+        {/if}
       </p>
     </section>
 
