@@ -104,7 +104,12 @@ class FetchInput(BaseModel):
 
 
 class MakeBilayerInput(BaseModel):
-    """Body di POST /api/make-bilayer: spec lipidica per build locale."""
+    """Body di POST /api/make-bilayer: spec lipidica per build locale.
+
+    I controlli fisici del launcher (box/centratura/layout/solvente) sono
+    accettati e conservati per provenance; lo script li ignora finché non
+    espone gli argomenti corrispondenti (make_bilayer.py supporta già ioni).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -112,6 +117,13 @@ class MakeBilayerInput(BaseModel):
     upper: str | None = None
     lower: str | None = None
     run_gmx: bool = False
+    box_x: float | None = None
+    box_y: float | None = None
+    box_z: float | None = None
+    center: bool | None = None
+    layout: str | None = None
+    solvent: str | None = None
+    ions: str | None = None  # "KCl" | "NaCl" | "none"
 
 
 def _validation_detail(exc: ValidationError) -> str:
@@ -324,6 +336,10 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             cmd += ["--lower", payload.lower]
         if payload.run_gmx:
             cmd += ["--run-gmx"]
+        # ioni: argomenti già supportati dallo script (ions "none" non passa:
+        # lo script non ha ancora un "nessun sale" reale — max(1,…) su conc 0)
+        if payload.ions in ("KCl", "NaCl"):
+            cmd += ["--ion-type", payload.ions, "--ion-conc", "0.15"]
 
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -354,6 +370,18 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             "run_gmx": payload.run_gmx,
             "source": "local",
         }
+        # provenance dei controlli fisici del launcher (box/layout/solvente)
+        launcher_params = {
+            "box_x": payload.box_x,
+            "box_y": payload.box_y,
+            "box_z": payload.box_z,
+            "center": payload.center,
+            "layout": payload.layout,
+            "solvent": payload.solvent,
+        }
+        if any(v is not None for v in launcher_params.values()) or payload.ions:
+            launcher_params["ions"] = payload.ions
+            spec_in["launcher"] = launcher_params
         label = payload.spec or payload.upper or "locale"
         try:
             store.add(jobid, spec_in, label=label, state="done", outdir=str(outdir_path))
