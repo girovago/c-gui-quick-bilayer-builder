@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""make_bilayer.py — genera una struttura bilayer all-atom in locale.
+"""make_bilayer.py - genera una struttura bilayer all-atom in locale.
 
 Legge una specifica lipidica (es. POPC=64;CHOL=16) e produce in
 results/AAAA-MM-GG_nome/:
@@ -26,6 +26,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import subprocess
 import sys
 from datetime import date, datetime
@@ -90,7 +91,7 @@ def parse_spec(spec: str | None) -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# Generatore PDB bilayer
+# Generatore posizioni lipidi
 # ---------------------------------------------------------------------------
 
 def _circle_positions(n: int, radius: float) -> list[tuple[float, float]]:
@@ -102,6 +103,23 @@ def _circle_positions(n: int, radius: float) -> list[tuple[float, float]]:
          radius * math.sin(2 * math.pi * i / n))
         for i in range(n)
     ]
+
+
+def _random_positions(n: int, radius: float, seed: int = 42) -> list[tuple[float, float]]:
+    """Distribuisce n punti in modo casuale (mosaico fluido) nel piano xy."""
+    if n <= 0:
+        return []
+    rng = random.Random(seed)
+    positions: list[tuple[float, float]] = []
+    attempts = 0
+    max_attempts = n * 100
+    while len(positions) < n and attempts < max_attempts:
+        attempts += 1
+        # campiona raggio e angolo uniformemente nell'area del cerchio
+        r = radius * math.sqrt(rng.random())
+        theta = rng.random() * 2 * math.pi
+        positions.append((r * math.cos(theta), r * math.sin(theta)))
+    return positions
 
 
 def _lipid_atom_lines(
@@ -153,19 +171,26 @@ def _lipid_atom_lines(
 def generate_pdb(
     upper: dict[str, int],
     lower: dict[str, int],
-    box_nm: float = 12.0,
+    box_x: float = 12.0,
+    box_y: float = 12.0,
+    box_z: float = 12.0,
+    center: bool = True,
+    layout: str = "planar",
 ) -> str:
     """Genera una stringa PDB di un bilayer con due fogli.
 
     upper/lower: dizionari {NOME_LIPIDE: count}
-    box_nm: dimensione della scatola cubica (nm)
+    box_x/box_y/box_z: dimensioni della scatola (nm)
+    center: centra la struttura nel box
+    layout: "planar" (griglia regolare) o "fluid" (mosaico casuale)
     """
     lines: list[str] = []
     lines.append("TITLE    BILAYER GENERATO DA make_bilayer.py (cgui-studio)")
     lines.append(
         "REMARK   Foglio superiore (upper) e inferiore (lower)"
     )
-    lines.append(f"REMARK   Scatola: {box_nm:.2f} x {box_nm:.2f} x {box_nm:.2f} nm")
+    lines.append(f"REMARK   Scatola: {box_x:.2f} x {box_y:.2f} x {box_z:.2f} nm")
+    lines.append(f"REMARK   Layout: {layout}, centro={'si' if center else 'no'}")
 
     resno = 1
     total_lipids = sum(upper.values()) + sum(lower.values())
@@ -176,25 +201,43 @@ def generate_pdb(
     total_area = total_lipids * area_per_lipid * 1.3
     sheet_radius = math.sqrt(total_area / math.pi)
 
+    # scegli generatore posizioni
+    if layout == "fluid":
+        upper_positions = _random_positions(sum(upper.values()), sheet_radius * 0.8)
+        lower_positions = _random_positions(sum(lower.values()), sheet_radius * 0.8, seed=7)
+    else:
+        upper_positions = _circle_positions(sum(upper.values()), sheet_radius * 0.8)
+        lower_positions = _circle_positions(sum(lower.values()), sheet_radius * 0.8)
+
+    # offset di centratura (sposta il centro di massa a 0,0 se richiesto)
+    ox_off = oy_off = 0.0
+    if center:
+        all_pos = upper_positions + lower_positions
+        if all_pos:
+            ox_off = -sum(p[0] for p in all_pos) / len(all_pos)
+            oy_off = -sum(p[1] for p in all_pos) / len(all_pos)
+
     # --- Foglio superiore ---
-    upper_positions = _circle_positions(sum(upper.values()), sheet_radius * 0.8)
     idx = 0
     for resname in sorted(upper):
         for _ in range(upper[resname]):
             x, y = upper_positions[idx]
             idx += 1
-            for line in _lipid_atom_lines(resname, resno, x, y, HEAD_Z, "U"):
+            for line in _lipid_atom_lines(
+                resname, resno, x + ox_off, y + oy_off, HEAD_Z, "U",
+            ):
                 lines.append(line)
             resno += 1
 
     # --- Foglio inferiore ---
-    lower_positions = _circle_positions(sum(lower.values()), sheet_radius * 0.8)
     idx = 0
     for resname in sorted(lower):
         for _ in range(lower[resname]):
             x, y = lower_positions[idx]
             idx += 1
-            for line in _lipid_atom_lines(resname, resno, x, y, -HEAD_Z, "L"):
+            for line in _lipid_atom_lines(
+                resname, resno, x + ox_off, y + oy_off, -HEAD_Z, "L",
+            ):
                 lines.append(line)
             resno += 1
 
@@ -211,8 +254,14 @@ def generate_top(
     lower: dict[str, int],
     ion_type: str = "KCl",
     ion_conc: float = 0.15,
+    solvent: str = "water",
+    ions: str = "KCl",
 ) -> str:
-    """Genera una topologia GROMACS scheletro (force field charmm36)."""
+    """Genera una topologia GROMACS scheletro (force field charmm36).
+
+    solvent: "water" -> aggiunge SOL, "none" -> nessuna acqua
+    ions: "KCl"/"NaCl" -> aggiunge ioni, "none" -> nessun ione
+    """
     lines: list[str] = []
     lines.append("; Topologia generata da make_bilayer.py (cgui-studio)")
     lines.append("; Force field: charmm36 (verificare disponibilità in $GMXDATA/top)")
@@ -248,25 +297,31 @@ def generate_top(
         lines.append(f"{name:<16s} {total_count:6d}")
     lines.append("")
 
-    n_lipids = sum(upper.values()) + sum(lower.values())
-    n_water = max(1, int(n_lipids * 30))
-    lines.append(f"SOL             {n_water:6d}")
-    n_ions = max(1, int(n_lipids * ion_conc * 0.1))
-    if "/" in ion_type:
-        ion_cat, ion_an = ion_type.split("/")
-    else:
-        ion_cat, ion_an = ion_type, "CL"
-    lines.append(f"{ion_cat:<16s} {n_ions:6d}")
-    lines.append(f"{ion_an:<16s} {n_ions:6d}")
+    # Acqua (solo se solvent attivo)
+    if solvent == "water":
+        n_lipids = sum(upper.values()) + sum(lower.values())
+        n_water = max(1, int(n_lipids * 30))
+        lines.append(f"SOL             {n_water:6d}")
+
+    # Ioni (solo se ioni attivo e solvent attivo - senza acqua gli ioni non stanno)
+    if ions != "none" and solvent == "water":
+        n_lipids = sum(upper.values()) + sum(lower.values())
+        n_ions = max(1, int(n_lipids * ion_conc * 0.1))
+        if "/" in ions:
+            ion_cat, ion_an = ions.split("/")
+        else:
+            ion_cat, ion_an = ions, "CL"
+        lines.append(f"{ion_cat:<16s} {n_ions:6d}")
+        lines.append(f"{ion_an:<16s} {n_ions:6d}")
     lines.append("")
 
     return "\n".join(lines) + "\n"
 
 
-def generate_mdp() -> str:
+def generate_mdp(box_x: float = 12.0, box_y: float = 12.0, box_z: float = 12.0) -> str:
     """Genera un file .mdp per minimizzazione energia (steepest descent)."""
-    return """;
-; Minimizzazione energia — generata da make_bilayer.py (cgui-studio)
+    return f""";
+; Minimizzazione energia - generata da make_bilayer.py (cgui-studio)
 ;
 
 integrator        = steep
@@ -286,6 +341,9 @@ rvdw              = 1.2
 pbc               = xyz
 
 ref-t             = 300
+
+; Dimensioni scatola (nm) - usate da gmx editconf
+; box_x = {box_x:.2f}, box_y = {box_y:.2f}, box_z = {box_z:.2f}
 """
 
 
@@ -395,6 +453,41 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--run-gmx", action="store_true",
         help="Esegue gmx editconf/solvate se disponibile",
     )
+    parser.add_argument(
+        "--box-x", type=float, default=12.0,
+        help="Dimensione box X in nm (default 12)",
+    )
+    parser.add_argument(
+        "--box-y", type=float, default=12.0,
+        help="Dimensione box Y in nm (default 12)",
+    )
+    parser.add_argument(
+        "--box-z", type=float, default=12.0,
+        help="Dimensione box Z in nm (default 12)",
+    )
+    parser.add_argument(
+        "--center", action="store_true", default=True,
+        help="Centra la struttura a (0,0,0) (default true)",
+    )
+    parser.add_argument(
+        "--no-center", action="store_false", dest="center",
+        help="Non centrare la struttura",
+    )
+    parser.add_argument(
+        "--layout", type=str, default="planar",
+        choices=["planar", "fluid"],
+        help="Disposizione lipidi: planar (griglia regolare) o fluid (mosaico casuale)",
+    )
+    parser.add_argument(
+        "--solvent", type=str, default="water",
+        choices=["water", "none"],
+        help="Solvente: water (acqua TIP3P) o none",
+    )
+    parser.add_argument(
+        "--ions", type=str, default="KCl",
+        choices=["KCl", "NaCl", "none"],
+        help="Ioni: KCl, NaCl o none",
+    )
     return parser
 
 
@@ -437,19 +530,27 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- PDB ---
     pdb_path = system_dir / "step1_pdbreader.pdb"
-    pdb_content = generate_pdb(upper, lower)
+    pdb_content = generate_pdb(
+        upper, lower,
+        box_x=args.box_x, box_y=args.box_y, box_z=args.box_z,
+        center=args.center, layout=args.layout,
+    )
     pdb_path.write_text(pdb_content)
 
     # --- TOP ---
     top_path = system_dir / "topol.top"
     top_content = generate_top(
-        upper, lower, ion_type=args.ion_type, ion_conc=args.ion_conc,
+        upper, lower,
+        ion_type=args.ion_type, ion_conc=args.ion_conc,
+        solvent=args.solvent, ions=args.ions,
     )
     top_path.write_text(top_content)
 
     # --- MDP ---
     mdp_path = system_dir / "minim.mdp"
-    mdp_path.write_text(generate_mdp())
+    mdp_path.write_text(
+        generate_mdp(box_x=args.box_x, box_y=args.box_y, box_z=args.box_z)
+    )
 
     # --- README ---
     readme_path = outdir / "README.txt"
@@ -457,7 +558,9 @@ def main(argv: list[str] | None = None) -> int:
         f"""Bilayer generato da make_bilayer.py (cgui-studio)
 Data: {datetime.now().isoformat()}
 Spec: upper={dict(upper)}, lower={dict(lower)}
-Force field: charmm36 (scheletro — completare parametri prima di gmx grompp)
+Box: {args.box_x} x {args.box_y} x {args.box_z} nm, centro={args.center}, layout={args.layout}
+Solvente: {args.solvent}, Ioni: {args.ions} ({args.ion_type} {args.ion_conc} M)
+Force field: charmm36 (scheletro - completare parametri prima di gmx grompp)
 File:
   system/step1_pdbreader.pdb  struttura bilayer
   system/topol.top            topologia GROMACS
@@ -478,7 +581,7 @@ File:
             r = run_gmx(
                 gmx_path,
                 ["editconf", "-f", pdb_abs, "-o", boxed_gro,
-                 "-bt", "cubic", "-d", "1.0"],
+                 "-box", f"{args.box_x}", f"{args.box_y}", f"{args.box_z}"],
                 cwd=system_dir,
             )
             if r.returncode != 0:
