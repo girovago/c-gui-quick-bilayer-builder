@@ -183,6 +183,31 @@
     }
   }
 
+  async function handleSubmit(spec) {
+    busy = true;
+    try {
+      const res = await api("/api/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          upper: spec,
+          lower: spec,
+          run_ffconverter: true,
+          membrane_only: true,
+          ion_type: "KCl",
+          ion_conc: 0.15,
+        }),
+      });
+      flash("ok", `Job CHARMM-GUI: ${res.jobid} inviato`);
+      selectedId = res.jobid;
+      detail = null;
+      await refreshJobs();
+    } catch (e) {
+      flash("err", e.message);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function fetchJob(id) {
     busy = true;
     try {
@@ -353,7 +378,7 @@
       </div>
 
       <div class={panel !== "single" && "hidden"} role="tabpanel" aria-label="Wizard singolo">
-        <Launcher onCreate={handleCreateLocal} />
+        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} />
       </div>
 
       <!-- BatchPanel resta MONTATO anche nei tab in cui non è visibile (class:hidden,

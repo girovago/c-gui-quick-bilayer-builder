@@ -19,7 +19,7 @@
   let selectedLipid = $state("POPC"); // quale sto editando con +/- 
   let upperLeaf = $state(true); // true = foglio superiore, false = inferiore
 
-  const { onCreate } = $props();
+  const { onCreate, onSubmit } = $props();
 
   // controlli fisici (scelti graficamente, mai a mano)
   let boxX = $state(12); // nm
@@ -70,6 +70,11 @@
     const spec = specString();
     const params = { boxX, boxY, boxZ, centerStructure, layout, solvent, ions };
     if (onCreate) onCreate(spec, params);
+  }
+
+  function submit() {
+    const spec = specString();
+    if (onSubmit) onSubmit(spec);
   }
 </script>
 
@@ -281,14 +286,24 @@
 
   <!-- Azione -->
   <div class="mt-4">
-    <button
-      type="button"
-      class="w-full rounded bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-600"
-      onclick={create}
-      title="Genera la struttura bilayer con questi lipidi, box, solvente e ioni scelti"
-    >
-      ▶ Crea struttura
-    </button>
+    <div class="flex flex-wrap gap-2">
+      <button
+        type="button"
+        class="flex-1 rounded bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-600"
+        onclick={create}
+        title="Genera la struttura bilayer con questi lipidi, box, solvente e ioni scelti"
+      >
+        ▶ Crea struttura
+      </button>
+      <button
+        type="button"
+        class="flex-1 rounded bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-600"
+        onclick={submit}
+        title="Invia la composizione al server CHARMM-GUI — nella coda reale l'attesa può essere molto lunga"
+      >
+        Invia a CHARMM-GUI
+      </button>
+    </div>
     <p class="mt-2 text-[10px] text-zinc-500">
       Nessuna attesa in coda: la struttura viene costruita in locale con GROMACS
     </p>
