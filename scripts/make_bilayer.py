@@ -130,40 +130,138 @@ def _lipid_atom_lines(
     z_head: float,
     chain_id: str = "A",
 ) -> list[str]:
-    """Genera righe ATOM per un singolo lipide (modello schematico all-atom).
+    """Genera righe ATOM per un singolo lipide (modello all-atom realistico).
 
-    Teste polari a z_head (fuori), code verso TAIL_END_Z (centro bilayer).
+    Geometria:
+      - Teste polari a z_head (fuori), con lunghezze di legame realistiche
+        (C-C 0.154, C-O 0.143, C-N 0.147, C-P 0.158, P-O 0.148 nm).
+      - Code: catena di atomi C con angolo tetraedrico (~112° C-C-C)
+        che scende verso TAIL_END_Z (centro bilayer).
     """
     lines: list[str] = []
     n_atoms = LIPID_ATOMS.get(resname, 15)
 
-    # atomi di testa
-    head_atoms = 4 if resname == "POPC" else 3
-    for i in range(head_atoms):
-        angle = (i / max(head_atoms, 1)) * 2 * math.pi
-        ox = x + 0.12 * math.cos(angle)
-        oy = y + 0.12 * math.sin(angle)
-        oz = z_head + (0.05 * i)
-        atom_name = "N" if i == 0 else ("P" if i == 1 else "O")
+    # ------------------------------------------------------------------
+    # Costanti geometriche (nm)
+    # ------------------------------------------------------------------
+    BOND_CC = 0.154
+    BOND_CO = 0.143
+    BOND_CN = 0.147
+    BOND_PO = 0.148
+    TETRA_RAD = math.radians(112.0)  # angolo C-C-C negli alcani
+    TAIL_TILT = 0.3  # inclinazione delle code verso il centro (rad)
+
+    # ------------------------------------------------------------------
+    # Testa polare (formato semplificato ma geometricamente coerente)
+    # ------------------------------------------------------------------
+    # N (colina) in cima, P sotto di essa, O attorno a P,
+    # C_glicerolo sotto P che collega alla prima coda
+
+    if resname == "POPC":
+        # N3 (colina)
+        h_n = (x, y, z_head)
+        # P sotto N
+        h_p = (x, y, z_head - BOND_CN)
+        # O1, O2 attorno a P (fossili del fosfato)
+        h_o1 = (x + BOND_PO, y, z_head - BOND_CN)
+        h_o2 = (x - BOND_PO, y, z_head - BOND_CN)
+        # C3 del glicerolo sotto P, collegato alla prima coda
+        h_c3 = (x, y + BOND_CO, z_head - BOND_CN - BOND_PO)
+
+        head_atoms = [
+            ("N3",  h_n,  "N",  0.00),
+            ("P",   h_p,  "P",  0.00),
+            ("O1",  h_o1, "O", -0.50),
+            ("O2",  h_o2, "O", -0.50),
+            ("C3",  h_c3, "C",  0.00),
+        ]
+    elif resname == "CHOL":
+        # Colesterolo: testa OH + anelli (semplificato a 4 atomi chiave)
+        h_o3 = (x, y, z_head)          # ossigeno idrossile
+        h_c3 = (x, y, z_head - BOND_CO)  # carbonio C3
+        h_c1 = (x + BOND_CC, y, z_head - BOND_CO - BOND_CC)
+        h_c2 = (x - BOND_CC, y, z_head - BOND_CO - BOND_CC)
+
+        head_atoms = [
+            ("O3", h_o3, "O", -0.50),
+            ("C3", h_c3, "C",  0.00),
+            ("C1", h_c1, "C",  0.00),
+            ("C2", h_c2, "C",  0.00),
+        ]
+    else:
+        # Generico: testa con N, P, O, C
+        h_n = (x, y, z_head)
+        h_p = (x, y, z_head - BOND_CN)
+        h_o1 = (x + BOND_PO, y, z_head - BOND_CN)
+        h_c3 = (x, y + BOND_CO, z_head - BOND_CN - BOND_PO)
+
+        head_atoms = [
+            ("N",  h_n,  "N",  0.00),
+            ("P",  h_p,  "P",  0.00),
+            ("O1", h_o1, "O", -0.50),
+            ("C3", h_c3, "C",  0.00),
+        ]
+
+    for _i, (name, (ox, oy, oz), elem, _charge) in enumerate(head_atoms):
         lines.append(
-            f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
+            f"ATOM  {len(lines)+1:5d} {name:>4s} {resname:>4s}"
             f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
-            f"1.00  0.00          {atom_name[0]:>2s}"
+            f"1.00  0.00          {elem:>2s}"
         )
 
-    # atomi di coda (vanno dalla testa verso il centro)
-    tail_atoms = n_atoms - head_atoms
-    for i in range(tail_atoms):
-        t = (i + 1) / (tail_atoms + 1)
-        oz = z_head + (TAIL_END_Z - z_head) * t
-        angle = (i / max(tail_atoms, 1)) * math.pi
-        ox = x + 0.25 * t * math.cos(angle)
-        oy = y + 0.25 * t * math.sin(angle)
-        lines.append(
-            f"ATOM  {len(lines)+1:5d} C{i+1:>4}  {resname:>4s}"
-            f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
-            f"1.00  0.00          C"
-        )
+    # ------------------------------------------------------------------
+    # Code: catene di atomi C con angolo tetraedrico verso il centro
+    # ------------------------------------------------------------------
+    # Per POPC: 2 code (satura + insatura). Per gli altri: 1 coda.
+    if resname == "POPC":
+        n_tails = 2
+        atoms_per_tail = (n_atoms - len(head_atoms)) // 2
+    else:
+        n_tails = 1
+        atoms_per_tail = n_atoms - len(head_atoms)
+
+    for tail_idx in range(n_tails):
+        # Ogni coda parte dal C3 del glicerolo
+        start_x, start_y, start_z = head_atoms[-1][1]  # C3 posizione
+        # Direzione iniziale: verso il basso (z diminuisce) con leggera dispersione
+        dir_x = math.sin(TAIL_TILT) * math.cos(tail_idx * math.pi / n_tails)
+        dir_y = math.sin(TAIL_TILT) * math.sin(tail_idx * math.pi / n_tails)
+        dir_z = -math.cos(TAIL_TILT)
+
+        cur_x, cur_y, cur_z = start_x, start_y, start_z
+        prev_dir_x, prev_dir_y, prev_dir_z = dir_x, dir_y, dir_z
+
+        for j in range(atoms_per_tail):
+            # Applica angolo tetraedrico: la direzione cambia leggermente a ogni passo
+            if j > 0:
+                # ruota la direzione di un angolo casuale intorno all'asse z
+                rot = TETRA_RAD * 0.3 * (0.5 - (j % 3) / 3.0)
+                nx = (
+                    prev_dir_x * math.cos(rot)
+                    - prev_dir_y * math.sin(rot)
+                )
+                ny = (
+                    prev_dir_x * math.sin(rot)
+                    + prev_dir_y * math.cos(rot)
+                )
+                nz = prev_dir_z * 0.9  # leggera attenuazione verso il basso
+                norm = math.sqrt(nx * nx + ny * ny + nz * nz)
+                prev_dir_x, prev_dir_y, prev_dir_z = nx / norm, ny / norm, nz / norm
+
+            cur_x += prev_dir_x * BOND_CC
+            cur_y += prev_dir_y * BOND_CC
+            cur_z += prev_dir_z * BOND_CC
+
+            # forza z verso il centro se si allontana troppo
+            target_z = TAIL_END_Z if z_head > 0 else -TAIL_END_Z
+            if (z_head > 0 and cur_z < target_z) or (z_head < 0 and cur_z > target_z):
+                cur_z = target_z
+
+            lines.append(
+                f"ATOM  {len(lines)+1:5d} C{tail_idx+1}{j+1:>3}  {resname:>4s}"
+                f"{chain_id:1s}{resno:4d}    {cur_x:8.3f}{cur_y:8.3f}{cur_z:8.3f}  "
+                f"1.00  0.00          C"
+            )
 
     return lines
 

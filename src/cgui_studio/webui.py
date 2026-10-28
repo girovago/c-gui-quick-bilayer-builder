@@ -336,8 +336,19 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             cmd += ["--lower", payload.lower]
         if payload.run_gmx:
             cmd += ["--run-gmx"]
-        # ioni: argomenti già supportati dallo script (ions "none" non passa:
-        # lo script non ha ancora un "nessun sale" reale — max(1,…) su conc 0)
+        # controlli fisici del launcher: passati allo script per generazione effettiva
+        if payload.box_x is not None:
+            cmd += ["--box-x", str(payload.box_x)]
+        if payload.box_y is not None:
+            cmd += ["--box-y", str(payload.box_y)]
+        if payload.box_z is not None:
+            cmd += ["--box-z", str(payload.box_z)]
+        if payload.center is not None and not payload.center:
+            cmd += ["--no-center"]
+        if payload.layout:
+            cmd += ["--layout", payload.layout]
+        if payload.solvent:
+            cmd += ["--solvent", payload.solvent]
         if payload.ions in ("KCl", "NaCl"):
             cmd += ["--ion-type", payload.ions, "--ion-conc", "0.15"]
 
