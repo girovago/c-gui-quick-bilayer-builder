@@ -12,6 +12,7 @@
   let message = $state("");
   let showWater = $state(false);
   let isSample = $state(false); // TRUE = demo locale in scena (badge giallo)
+  let isLocal = $state(false); // TRUE = build GROMACS generato in locale (badge azzurro)
   let style = $state("spacefill"); // stile della rappresentazione principale
   let panelOpen = $state(true); // pannello controlli (⚙ collassa su schermi stretti)
   let hint = $state(false); // pillola hint mouse (5s dal mount)
@@ -163,12 +164,15 @@
     mainRepr = null;
     compRef = null;
     state = "loading";
+    // badge: sample (giallo) vs build locale (azzurro) — esclusivi
+    isSample = false;
+    isLocal = String(key).startsWith("local-");
     try {
-      // /api/sample/pdb non ha estensione nell'URL: NGL deduce il formato
-      // dall'ultima parte del path → serve dichiararlo, altrimenti errore
+      // /api/sample/pdb e /api/files/local-*/.../step1_pdbreader.pdb possono
+      // non avere estensione riconoscibile da NGL: dichiaro ext pdb
       const comp = await stage.loadFile(url, {
         defaultRepresentation: false,
-        ...(url === SAMPLE ? { ext: "pdb" } : {}),
+        ...(url === SAMPLE || isLocal ? { ext: "pdb" } : {}),
       });
       if (key !== lastRequested) return; // sistema cambiato durante l'await: scarta
       decorate(comp);
@@ -192,7 +196,7 @@
       isSample = false; // il badge sparirà al load: il job reale è quello vero
       if (jobid === lastLoaded) return;
       lastLoaded = jobid;
-      load(jobid, `/api/files/${jobid}/system/step1_pdbreader.pdb`);
+      load(jobid, `/api/files/${jobid}/step1_pdbreader.pdb`);
     } else {
       // nessun sistema estratto: struttura campione locale in scena
       isSample = true;
@@ -224,6 +228,12 @@
       <span class="text-amber-700"> — demo locale, non il tuo sistema</span>
     </div>
   {/if}
+  {#if isLocal}
+    <div class="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded border border-cyan-400 bg-cyan-100/90 px-3 py-1 text-center text-xs text-cyan-900 backdrop-blur">
+      <span class="font-semibold tracking-wide">STRUTTURA LOCALE</span>
+      <span class="text-cyan-700"> — build GROMACS in locale, nessuna coda CHARMM-GUI</span>
+    </div>
+  {/if}
 
   {#if hint}
     <div class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-white/80 px-3 py-1 text-xs text-zinc-700 backdrop-blur">
@@ -243,12 +253,13 @@
         role="group"
         aria-label="Controlli vista 3D"
       >
-        <label class="flex items-center gap-1.5">
+        <label class="flex items-center gap-1.5" title="spacefill = sfere piene · ball+stick = sfere e bastoncini · licorice = solo bastoncini · cartoon = backbone (serve una proteina)">
           <span class="text-zinc-500">stile</span>
           <select
             bind:value={style}
             onchange={() => setStyle(style)}
             aria-label="Stile di rappresentazione"
+            title="spacefill = sfere piene · ball+stick = sfere e bastoncini · licorice = solo bastoncini · cartoon = backbone (serve una proteina)"
             class="w-[7.5rem] rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800 focus:border-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
           >
             <option value="spacefill">spacefill</option>
@@ -264,6 +275,7 @@
           type="button"
           class="rounded border border-zinc-300 px-1.5 py-0.5 text-left hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
           onclick={resetView}
+          title="Riporta la scena al centro e allo zoom originale"
         >
           reimposta vista
         </button>
@@ -275,7 +287,7 @@
       onclick={() => (panelOpen = !panelOpen)}
       aria-pressed={panelOpen}
       aria-label="Mostra/nascondi controlli vista 3D"
-      title="controlli vista"
+      title="Mostra/nascondi i controlli della vista 3D"
     >
       ⚙
     </button>

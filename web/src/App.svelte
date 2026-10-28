@@ -35,6 +35,7 @@
   let statusMsg = $state("");
   let toast = $state(null);
   let busy = $state(false);
+  let localBusy = $state(false);
   let previewOpen = $state(false);
   let previewData = $state(null);
   let mockMode = $state(false);
@@ -107,6 +108,31 @@
       flash("err", e.message);
     } finally {
       busy = false;
+    }
+  }
+
+  async function makeLocal() {
+    localBusy = true;
+    try {
+      const body = { run_gmx: true };
+      if (form.membtype === "") {
+        body.spec = `${form.upper};${form.lower}`;
+      } else {
+        body.spec = form.membtype;
+      }
+      const res = await api("/api/make-bilayer", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      flash("ok", `Struttura locale: ${res.jobid} · ${res.files.length} file`);
+      selectedId = res.jobid;
+      detail = null;
+      await refreshDetail();
+      await refreshJobs();
+    } catch (e) {
+      flash("err", e.message);
+    } finally {
+      localBusy = false;
     }
   }
 
@@ -293,59 +319,82 @@
       </fieldset>
 
       {#if form.membtype === ""}
-        <label class="mb-1 block text-xs text-zinc-600" for="f-upper">foglia upper (righe LIPID=count)</label>
+        <label class="mb-1 block text-xs text-zinc-600" for="f-upper">foglio superiore (upper leaf) — righe NOME=count</label>
         <textarea id="f-upper" rows="2" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 font-mono text-xs uppercase text-zinc-800 focus:border-cyan-500 focus:outline-none" bind:value={form.upper}></textarea>
-        <label class="mb-1 block text-xs text-zinc-600" for="f-lower">foglia lower</label>
-        <textarea id="f-lower" rows="2" class="mb-2 w-full rounded border border-zinc-300 bg-white px-2 py-1 font-mono text-xs uppercase text-zinc-800 focus:border-cyan-500 focus:outline-none" bind:value={form.lower}></textarea>
+        <label class="mb-1 mt-2 block text-xs text-zinc-600" for="f-lower">foglio inferiore (lower leaf)</label>
+        <textarea id="f-lower" rows="2" class="mb-1 w-full rounded border border-zinc-300 bg-white px-2 py-1 font-mono text-xs uppercase text-zinc-800 focus:border-cyan-500 focus:outline-none" bind:value={form.lower}></textarea>
+        <p class="mb-2 text-[11px] leading-snug text-zinc-500">
+          es. <code class="text-zinc-600">POPC=64</code> = 64 lipidi POPC su quel foglio · un tipo per riga
+          (<code class="text-zinc-600">POPC=48</code> poi <code class="text-zinc-600">CHOL=16</code>) o più tipi su una riga
+          (<code class="text-zinc-600">POPC=48;CHOL=16</code>)
+        </p>
         {#if !upperOk}
-          <p class="mb-2 text-xs text-amber-600">righe non valide: servono LIPID=count (es. POPC=64)</p>
+          <p class="mb-2 text-xs text-amber-600">righe non valide: servono NOME=count (es. POPC=64)</p>
         {/if}
       {:else}
-        <label class="mb-1 block text-xs text-zinc-600" for="f-membtype">biomembrana predefinita</label>
-        <select id="f-membtype" class="mb-2 w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.membtype}>
+        <label class="mb-1 block text-xs text-zinc-600" for="f-membtype">biomembrana predefinita (preset del server)</label>
+        <select id="f-membtype" placeholder="Scegli un preset del server" class="mb-1 w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.membtype}>
           {#each MEMB_PRESETS as m (m)}
             <option value={m}>{m}</option>
           {/each}
         </select>
+        <p class="mb-2 text-[11px] leading-snug text-zinc-500">
+          sostituisce upper/lower con una composizione predefinita dal server (es. POPE/POPG…):
+          usala solo per membrane standard, torna a "upper/lower" per comporne una a mano
+        </p>
       {/if}
 
       <h2 class="mb-2 mt-3 text-sm font-semibold text-zinc-700">2 · parametri</h2>
       <div class="grid grid-cols-3 gap-2">
-        <label for="f-margin"><span class="mb-1 block text-xs text-zinc-600">margin</span>
-          <input id="f-margin" type="number" step="0.1" min="0.5" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.margin} />
+        <label for="f-margin"><span class="mb-1 block text-xs text-zinc-600" title="spazio extra attorno al sistema (Å). Per un build di solo membrana il default 20 va bene">margin (Å)</span>
+          <input id="f-margin" type="number" step="0.1" min="0.5" title="spazio extra attorno al sistema (Å). Per un build di solo membrana lascia il default 20" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.margin} />
         </label>
-        <label for="f-wdist"><span class="mb-1 block text-xs text-zinc-600">wdist</span>
-          <input id="f-wdist" type="number" step="0.1" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.wdist} />
+        <label for="f-wdist"><span class="mb-1 block text-xs text-zinc-600" title="distanza tra lipidi e teste polari (Å): pilota lo spessore del vano vuoto nel bilayer">wdist (Å)</span>
+          <input id="f-wdist" type="number" step="0.1" title="distanza tra lipidi e teste polari (Å): pilota lo spessore del vano vuoto nel bilayer; default 1" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.wdist} />
         </label>
-        <label for="f-ionconc"><span class="mb-1 block text-xs text-zinc-600">ion_conc</span>
-          <input id="f-ionconc" type="number" step="0.01" min="0" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.ion_conc} />
+        <label for="f-ionconc"><span class="mb-1 block text-xs text-zinc-600" title="concentrazione del sale (mol/L): 0.15 M = fisiologica">ion_conc (M)</span>
+          <input id="f-ionconc" type="number" step="0.01" min="0" title="concentrazione del sale (mol/L): 0.15 = fisiologica" class="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800" bind:value={form.ion_conc} />
         </label>
       </div>
       <label for="f-iontype">
-        <span class="mb-1 mt-2 block text-xs text-zinc-600">ion_type</span>
-        <select id="f-iontype" class="w-40 rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800 uppercase" bind:value={form.ion_type}>
+        <span class="mb-1 mt-2 block text-xs text-zinc-600" title="tipo di sale aggiunto per neutralizzare la carica del bilayer e raggiungere la concentrazione richiesta">ion_type</span>
+        <select id="f-iontype" class="w-40 rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800 uppercase" bind:value={form.ion_type} title="tipo di sale, solo NaCl o KCl: neutralizza la carica del sistema">
           <option value="NaCl">NACL</option>
           <option value="KCl">KCL</option>
         </select>
       </label>
       <div class="mt-3 flex flex-col gap-1 text-xs text-zinc-700">
-        <label><input type="checkbox" class="accent-cyan-500" bind:checked={form.membrane_only} /> membrane_only</label>
-        <label><input type="checkbox" class="accent-cyan-500" bind:checked={form.run_ffconverter} /> run_ffconverter (necessario per gli input GROMACS)</label>
+        <label><input type="checkbox" class="accent-cyan-500" bind:checked={form.membrane_only} title="costruisce SOLO il bilayer, senza solvatare/inglobare una proteina da PDB Reader" /> membrane_only — solo bilayer, nessuna proteina</label>
+        <label><input type="checkbox" class="accent-cyan-500" bind:checked={form.run_ffconverter} title="genera gli input dei motori MD (GROMACS/AMBER/NAMD) oltre alla struttura; disattiva se serve solo il PDB" /> run_ffconverter — genera input GROMACS/AMBER/NAMD (disattiva se serve solo il PDB)</label>
       </div>
 
-      <div class="mt-4 flex items-center gap-2">
+      <div class="mt-4 flex flex-wrap gap-2">
         <button
           class="rounded bg-cyan-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-600"
           onclick={submitJob}
           disabled={!valid || busy}
           aria-disabled={!valid || busy}
+          title="Invia la composizione al server CHARMM-GUI — nella coda reale l'attesa può essere molto lunga"
         >
           Invia
         </button>
         <button
+          class="rounded bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-600"
+          onclick={makeLocal}
+          disabled={!valid || localBusy}
+          aria-disabled={!valid || localBusy}
+          title="Costruisce la bilayer in locale con GROMACS (editconf+solvate): nessuna attesa in coda, pronto in secondi"
+        >
+          Genera locale
+        </button>
+        {#if localBusy}
+          <span class="text-xs text-emerald-700 animate-pulse">build locale in corso…</span>
+        {/if}
+        <button
           class="rounded border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-50"
           onclick={showPreview}
           aria-expanded={previewOpen}
+          title="Mostra l'esatta richiesta che partirà verso il server (debug)"
         >
           Payload
         </button>
@@ -353,6 +402,9 @@
           <span class="truncate text-xs text-emerald-700">{statusMsg}</span>
         {/if}
       </div>
+      <p class="mt-1 text-[11px] leading-snug text-zinc-500">
+        dopo l'invio il job entra nella coda del server: seguilo nella lista a destra
+      </p>
 
       {#if previewOpen && previewData}
         <div class="mt-3 max-h-56 overflow-auto rounded border border-zinc-300 bg-white p-2 font-mono text-[11px] leading-relaxed text-zinc-700">
@@ -386,6 +438,7 @@
       <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold text-zinc-700">
         job <span class="text-xs font-normal text-zinc-500">({jobs.length} · aggiornamento 10s)</span>
       </h2>
+      <p class="mb-2 text-[11px] leading-snug text-zinc-500">i build che hai inviato al server, con stato aggiornato in tempo reale</p>
       {#if jobs.length === 0}
         <p class="mb-3 text-xs text-zinc-500">archivio vuoto — invia il primo build dal form</p>
       {:else}
@@ -431,16 +484,23 @@
               onclick={() => fetchJob(selectedId)}
               disabled={busy || status.status !== "done"}
               aria-disabled={busy || status.status !== "done"}
+              title="Scarica l'archivio tar.gz del job finito ed estrailo in locale (results/… con manifest sha256)"
             >
               Scarica e estrai
             </button>
             <button
               class="rounded border border-zinc-600 px-2 py-1 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
               onclick={() => cloneToForm(record)}
+              title="Ricarica la composizione di questo job nei campi del form (l'API non ha undo: ogni modifica = nuovo job)"
             >
               Clona nel form
             </button>
           </div>
+          {#if status.rank && /ahead|pending/i.test(status.rank)}
+            <p class="mt-2 text-[11px] leading-snug text-amber-600">
+              in coda sul server: la coda CHARMM-GUI oggi è sovraccarica, l'attesa può durare a lungo
+            </p>
+          {/if}
           {#if files.length}
             <details class="mt-2">
               <summary class="cursor-pointer text-zinc-600">file estratti ({files.length})</summary>

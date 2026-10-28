@@ -20,9 +20,12 @@ Spec (pydantic).
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -31,7 +34,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .client import ApiError, AuthError, Client, JobError, fetch_job
+from .client import ApiError, AuthError, CguiError, Client, JobError, fetch_job
 from .models import JobRecord, JobStatus, Spec
 from .paths import default_results_dir
 from .store import JobStore
@@ -98,6 +101,17 @@ class FetchInput(BaseModel):
 
     wait: bool = False
     timeout: float = 3600.0
+
+
+class MakeBilayerInput(BaseModel):
+    """Body di POST /api/make-bilayer: spec lipidica per build locale."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec: str | None = None
+    upper: str | None = None
+    lower: str | None = None
+    run_gmx: bool = False
 
 
 def _validation_detail(exc: ValidationError) -> str:
@@ -188,9 +202,14 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     @app.get("/api/jobs/{jobid}")
     def job_detail(jobid: str) -> dict[str, Any]:
         _record_or_404(store, jobid)
-        with _map_errors(app.state.mock):
-            st = client.status(jobid)
-        record = _sync_status(store, jobid, st)
+        if jobid.startswith("local-"):
+            # Job generato in locale: stato "done" simulato, niente client CHARMM-GUI.
+            st = JobStatus(status="done", rank="locale", last_inp_step=0, has_tar=False, error=None)
+            record = _record_or_404(store, jobid)
+        else:
+            with _map_errors(app.state.mock):
+                st = client.status(jobid)
+            record = _sync_status(store, jobid, st)
         return {
             "record": (record or _record_or_404(store, jobid)).model_dump(mode="json"),
             "status": st.model_dump(mode="json", exclude_none=True),
@@ -274,6 +293,90 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     def form_preview(payload: JobInput) -> dict[str, Any]:
         spec = payload.to_spec()
         return {"query": spec.to_query(), "form": spec.to_form()}
+
+    @app.post("/api/make-bilayer")
+    def make_bilayer(payload: MakeBilayerInput) -> dict[str, Any]:
+        """Genera una struttura bilayer all-atom in locale (GROMACS-compatibile).
+
+        Esegue scripts/make_bilayer.py dentro l'ambiente conda `cgui-builder`
+        (Python 3.12, GROMACS 2026.3, mdtraj/MDAnalysis) e registra il risultato
+        come job `local-<ts>` nello store: stato "done", outdir assoluto, così
+        le rotte /api/files/{jobid} e il dettaglio funzionano come per i job
+        CHARMM-GUI reali.
+        """
+        script = Path(__file__).resolve().parents[2] / "scripts" / "make_bilayer.py"
+        if not script.exists():
+            raise HTTPException(500, f"script non trovato: {script}")
+        conda = Path.home() / "miniforge3" / "bin" / "conda"
+        if not conda.exists():
+            raise HTTPException(500, "conda non trovato in ~/miniforge3/bin/conda")
+
+        base_out = default_results_dir()
+        cmd = [
+            str(conda), "run", "-n", "cgui-builder", "python", str(script),
+            "--output", str(base_out),
+        ]
+        if payload.spec:
+            cmd += ["--spec", payload.spec]
+        if payload.upper:
+            cmd += ["--upper", payload.upper]
+        if payload.lower:
+            cmd += ["--lower", payload.lower]
+        if payload.run_gmx:
+            cmd += ["--run-gmx"]
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(504, f"make_bilayer timeout: {exc}") from exc
+
+        if res.returncode != 0:
+            raise HTTPException(502, f"make_bilayer fallito: {res.stderr[-800:]}")
+
+        outdir = None
+        for line in res.stdout.splitlines():
+            if line.startswith("Bilayer generato in: "):
+                outdir = line.split("Bilayer generato in: ", 1)[1].strip()
+                break
+        if not outdir:
+            raise HTTPException(502, f"outdir non trovato nell'output: {res.stdout[-500:]}")
+
+        outdir_path = Path(outdir)
+        system_dir = outdir_path / "system"
+
+        # Record nello store come job locale (stato "done", outdir assoluto).
+        # Le rotte /api/files/{jobid} e il dettaglio funzionano come per i job reali.
+        jobid = f"local-{int(datetime.now(UTC).timestamp())}"
+        spec_in = {
+            "spec": payload.spec,
+            "upper": payload.upper,
+            "lower": payload.lower,
+            "run_gmx": payload.run_gmx,
+            "source": "local",
+        }
+        label = payload.spec or payload.upper or "locale"
+        try:
+            store.add(jobid, spec_in, label=label, state="done", outdir=str(outdir_path))
+        except CguiError:
+            jobid = f"local-{int(datetime.now(UTC).timestamp() * 1000)}"
+            store.add(jobid, spec_in, label=label, state="done", outdir=str(outdir_path))
+
+        files = []
+        if system_dir.is_dir():
+            for entry in sorted(system_dir.iterdir()):
+                if entry.is_file():
+                    files.append({"name": entry.name, "size": entry.stat().st_size})
+
+        manifest_path = outdir_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+
+        return {
+            "jobid": jobid,
+            "outdir": str(outdir_path),
+            "system_dir": str(system_dir),
+            "files": files,
+            "manifest": manifest,
+        }
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
