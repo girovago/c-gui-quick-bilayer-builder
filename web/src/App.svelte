@@ -43,6 +43,14 @@
   let panel = $state("single"); // "single" | "batch" — i pannelli restano MONTATI (hidden):
   // cambiare tab non distrugge la coda batch (che vive in-session)
 
+  // Nuovi parametri del launcher (proteine, acidi nucleici, small molecules)
+  let buildType = $state("lipid"); // "lipid" | "protein" | "dna" | "rna" | "small-mol"
+  let proteinPdbId = $state("");
+  let proteinPdbFileName = $state(null);
+  let dnaSequence = $state("");
+  let rnaSequence = $state("");
+  let smallMolFileName = $state(null);
+
   const record = $derived(detail?.record ?? null);
   const status = $derived(detail?.status ?? null);
   // confronto affiancato: secondo sistema mostrato accanto al job selezionato
@@ -155,10 +163,14 @@
   async function handleCreateLocal(spec, params) {
     localBusy = true;
     try {
-      const body = { spec, run_gmx: true };
+      const body = { run_gmx: true };
+      if (params?.upper && params?.lower) {
+        body.upper = params.upper;
+        body.lower = params.lower;
+      } else {
+        body.spec = spec;
+      }
       if (params) {
-        // i controlli fisici del launcher passano al backend (snake_case);
-        // solo ioni ha già un effetto reale su make_bilayer.py (--ion-type)
         body.box_x = params.boxX;
         body.box_y = params.boxY;
         body.box_z = params.boxZ;
@@ -166,6 +178,13 @@
         body.layout = params.layout;
         body.solvent = params.solvent;
         body.ions = params.ions;
+        // Nuovi campi per proteine, acidi nucleici, small molecules
+        body.build_type = params.buildType;
+        body.protein_pdb_id = params.proteinPdbId;
+        body.protein_pdb_file_name = params.proteinPdbFileName;
+        body.dna_sequence = params.dnaSequence;
+        body.rna_sequence = params.rnaSequence;
+        body.small_mol_file_name = params.smallMolFileName;
       }
       const res = await api("/api/make-bilayer", {
         method: "POST",
@@ -183,14 +202,14 @@
     }
   }
 
-  async function handleSubmit(spec) {
+  async function handleSubmit(spec, params) {
     busy = true;
     try {
       const res = await api("/api/jobs", {
         method: "POST",
         body: JSON.stringify({
-          upper: spec,
-          lower: spec,
+          upper: params?.upper || spec,
+          lower: params?.lower || params?.upper || spec,
           run_ffconverter: true,
           membrane_only: true,
           ion_type: "KCl",

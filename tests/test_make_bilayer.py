@@ -69,14 +69,14 @@ def test_generate_pdb_counts_match():
     assert len(atom_lines) > 0
     joined = " ".join(atom_lines)
     assert "POPC" in joined
-    assert "CHOL" in joined
+    assert "CHL1" in joined  # CHOL è mappato al nome rtp CHARMM36 del colesterolo
 
 
 def test_generate_top_has_molecules():
     top = generate_top({"POPC": 4}, {"CHOL": 2}, ion_type="KCl", ion_conc=0.15)
     assert "[ molecules ]" in top
     assert "POPC" in top
-    assert "CHOL" in top
+    assert "CHL1" in top  # CHOL → CHL1 (colesterolo CHARMM36)
     assert 'include "charmm36.ff/forcefield.itp"' in top
 
 

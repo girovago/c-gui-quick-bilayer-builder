@@ -124,6 +124,12 @@ class MakeBilayerInput(BaseModel):
     layout: str | None = None
     solvent: str | None = None
     ions: str | None = None  # "KCl" | "NaCl" | "none"
+    build_type: str | None = None  # "lipid" | "protein" | "dna" | "rna" | "small-mol"
+    protein_pdb_id: str | None = None
+    protein_pdb_file_name: str | None = None
+    dna_sequence: str | None = None
+    rna_sequence: str | None = None
+    small_mol_file_name: str | None = None
 
 
 def _validation_detail(exc: ValidationError) -> str:
@@ -351,6 +357,17 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             cmd += ["--solvent", payload.solvent]
         if payload.ions in ("KCl", "NaCl"):
             cmd += ["--ion-type", payload.ions, "--ion-conc", "0.15"]
+        # Nuovi campi per proteine, acidi nucleici, small molecules
+        if payload.build_type:
+            cmd += ["--build-type", payload.build_type]
+        if payload.protein_pdb_id:
+            cmd += ["--pdb", payload.protein_pdb_id]
+        if payload.dna_sequence:
+            cmd += ["--dna", payload.dna_sequence]
+        if payload.rna_sequence:
+            cmd += ["--rna", payload.rna_sequence]
+        if payload.small_mol_file_name:
+            cmd += ["--small-mol", payload.small_mol_file_name]
 
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)

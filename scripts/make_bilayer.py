@@ -4,19 +4,24 @@
 Legge una specifica lipidica (es. POPC=64;CHOL=16) e produce in
 results/AAAA-MM-GG_nome/:
     system/step1_pdbreader.pdb   struttura bilayer (PDB)
-    topol.top                    topologia GROMACS (scheletro charmm36)
-    minim.mdp                    parametri di minimizzazione energia
+    topol.top                    topologia GROMACS (charmm36)
+    minim.mdp                    minimizzazione energia (steep)
     README.txt                   nota di provenienza
     manifest.json                sha256 dei file generati
 
-Lo script è puro Python (stdlib) per la generazione PDB/TOP/MDP.
-Se gmx è disponibile nell'ambiente, esegue anche:
+Se gmx è disponibile, esegue anche:
     gmx editconf   (centra e box)
     gmx solvate    (aggiunge acqua)
+    gmx grompp     (prepara minim.tpr)
+    gmx mdrun      (esegue minimizzazione)
 
 Uso tipico:
     python scripts/make_bilayer.py --spec "POPC=64;CHOL=16"
-    python scripts/make_bilayer.py --upper "POPC=64" --lower "POPC=48;CHOL=16"
+    python scripts/make_bilayer.py --upper "POPC=64" --lower "POPC=48;CHOL=16" --run-gmx
+    python scripts/make_bilayer.py --pdb "1ABC" --run-gmx      # proteina da PDB
+    python scripts/make_bilayer.py --dna "ATGC" --run-gmx
+    python scripts/make_bilayer.py --rna "AUGC" --run-gmx
+    python scripts/make_bilayer.py --small-mol "ligand.pdb" --run-gmx
 """
 
 from __future__ import annotations
@@ -27,8 +32,11 @@ import json
 import math
 import os
 import random
+import re
+import shutil
 import subprocess
 import sys
+import tarfile
 from datetime import date, datetime
 from pathlib import Path
 
@@ -40,23 +48,101 @@ HEAD_Z = 2.6          # posizione teste polari (fuori dal bilayer)
 TAIL_END_Z = 0.2      # estremità code (verso centro bilayer)
 LIPID_RADIUS = 0.55   # raggio occupato da un lipide nel piano xy (nm)
 
-# Residui supportati con conteggio atomi approssimativo (all-atom ridotto)
+# Distanze legame tipiche (nm)
+BOND_CC = 0.154
+BOND_CO = 0.143
+BOND_CN = 0.147
+BOND_CP = 0.158
+BOND_PO = 0.148
+TETRA_RAD = math.radians(112.0)  # angolo C-C-C negli alcani
+TAIL_TILT = 0.3  # inclinazione delle code verso il centro (rad)
+
+# Conteggio atomi per lipide (all-atom semplificato)
 LIPID_ATOMS = {
-    "POPC": 21,  # testa colina+fosfato+glicerolo + 2 code (16:0 + 18:1)
-    "CHOL": 27,  # colesterolo (anelli + coda + idrossile)
+    "POPC": 21,
+    "CHOL": 27,
     "DOPC": 21,
     "DPPC": 21,
     "POPE": 20,
+    "DOPS": 22,
+    "DOTAP": 23,
+    "SM": 28,
 }
 
+# Lipid per cui abbiamo dati in lipid.rtp
+LIPID_NAME_MAP = {
+    "POPC": "POPC",
+    "CHOL": "CHL1",  # colesterolo CHARMM36 (CHM1 è un analogo troncato, ERRATO)
+    "POPE": "POPE",
+    "DPPC": "DPPC",
+    "DSPC": "DSPC",
+    "DOPS": "DOPS",
+    "DOTAP": "DOTAP",
+    "SM": "PSM",  # sfingomielina d18:1/16:0 (LSM è d18:1/24:0)
+}
 
 # ---------------------------------------------------------------------------
-# Parsing spec
+# Parsing lipid.rtp CHARMM36 (atomi, bond, impropers per ogni residuo)
 # ---------------------------------------------------------------------------
+
+LIPID_RTP_PATH = "/tmp/opencode/lipid.rtp"
+
+
+def parse_lipid_rtp(path: str) -> dict:
+    """Parsa lipid.rtp CHARMM36 e restituisce dizionario per residuo:
+    { NOME: {'atoms': [(name, type, charge, group), ...],
+             'bonds': [(a1, a2), ...],
+             'impropers': [(a1, a2, a3, a4), ...]} }
+    """
+    residues: dict = {}
+    current: str | None = None
+    section: str | None = None
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith(";"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                inner = line[1:-1].strip()
+                if inner in ("atoms", "bonds", "impropers"):
+                    section = inner
+                    continue
+                else:
+                    current = inner
+                    section = None
+                    residues[current] = {"atoms": [], "bonds": [], "impropers": []}
+                    continue
+            if current is None:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = None
+                continue
+            if section == "atoms":
+                parts = line.split()
+                if len(parts) >= 4:
+                    residues[current]["atoms"].append(
+                        (parts[0], parts[1], float(parts[2]), int(parts[3]))
+                    )
+            elif section == "bonds":
+                parts = line.split()
+                if len(parts) >= 2:
+                    residues[current]["bonds"].append((parts[0], parts[1]))
+            elif section == "impropers":
+                parts = line.split()
+                if len(parts) >= 4:
+                    residues[current]["impropers"].append(tuple(parts[:4]))
+    return residues
+
+
+LIPID_RTP_DATA: dict = {}
+try:
+    LIPID_RTP_DATA = parse_lipid_rtp(LIPID_RTP_PATH)
+except Exception:
+    LIPID_RTP_DATA = {}
+
 
 def parse_lipid_text(text: str) -> dict[str, int]:
     """Converte 'POPC=64;CHOL=16' in {'POPC': 64, 'CHOL': 16}.
-
     Accetta separatori ';' o newline. Valori interi positivi.
     """
     if not text or not text.strip():
@@ -72,7 +158,8 @@ def parse_lipid_text(text: str) -> dict[str, int]:
         name, count_s = raw.split("=", 1)
         name = name.strip().upper()
         count_s = count_s.strip()
-        if not name.isalpha():
+        # i nomi CHARMM36 contengono cifre e trattini (CHL1, TOCL1, SB3-12…)
+        if not name.replace("-", "").isalnum():
             raise ValueError(f"nome lipidico non valido: '{name}'")
         try:
             count = int(count_s)
@@ -115,7 +202,6 @@ def _random_positions(n: int, radius: float, seed: int = 42) -> list[tuple[float
     max_attempts = n * 100
     while len(positions) < n and attempts < max_attempts:
         attempts += 1
-        # campiona raggio e angolo uniformemente nell'area del cerchio
         r = radius * math.sqrt(rng.random())
         theta = rng.random() * 2 * math.pi
         positions.append((r * math.cos(theta), r * math.sin(theta)))
@@ -130,20 +216,33 @@ def _lipid_atom_lines(
     z_head: float,
     chain_id: str = "A",
 ) -> list[str]:
-    """Genera righe ATOM per un singolo lipide (modello all-atom realistico).
+    """Genera righe ATOM per un singolo lipide usando nomi atomi CHARMM36 reali
+    da lipid.rtp.
 
-    Geometria:
-      - Teste polari a z_head (fuori), con lunghezze di legame realistiche
-        (C-C 0.154, C-O 0.143, C-N 0.147, C-P 0.158, P-O 0.148 nm).
-      - Code: catena di atomi C con angolo tetraedrico (~112° C-C-C)
-        che scende verso TAIL_END_Z (centro bilayer).
+    Le coordinate sono generate geometricamente (testa in alto, code verso il
+    centro) con lunghezze di legame realistiche. I nomi degli atomi corrispondono
+    esattamente a quelli definiti in lipid.rtp.
     """
     lines: list[str] = []
-    n_atoms = LIPID_ATOMS.get(resname, 15)
 
-    # ------------------------------------------------------------------
+    rtp_name = LIPID_NAME_MAP.get(resname, resname)
+    residue = LIPID_RTP_DATA.get(rtp_name)
+
+    if residue is None:
+        # Residuo non in lipid.rtp: genera atomi generici con nomi semplici
+        n_atoms = LIPID_ATOMS.get(resname, 15)
+        for i in range(n_atoms):
+            atom_name = f"C{i+1}" if i > 0 else "C1"
+            lines.append(
+                f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
+                f"{chain_id:1s}{resno:4d}    {x:8.3f}{y:8.3f}{z_head:8.3f}  "
+                f"1.00  0.00          C"
+            )
+        return lines
+
+    atoms_info = residue["atoms"]  # lista di (name, type, charge, group)
+
     # Costanti geometriche (nm)
-    # ------------------------------------------------------------------
     BOND_CC = 0.154
     BOND_CO = 0.143
     BOND_CN = 0.147
@@ -151,117 +250,127 @@ def _lipid_atom_lines(
     TETRA_RAD = math.radians(112.0)  # angolo C-C-C negli alcani
     TAIL_TILT = 0.3  # inclinazione delle code verso il centro (rad)
 
-    # ------------------------------------------------------------------
-    # Testa polare (formato semplificato ma geometricamente coerente)
-    # ------------------------------------------------------------------
-    # N (colina) in cima, P sotto di essa, O attorno a P,
-    # C_glicerolo sotto P che collega alla prima coda
+    # Classifica gli atomi per categoria
+    head_names: list[str] = []   # N, P, O* (testa polare)
+    glycerol_names: list[str] = []  # C1, C2, C3 (glicerolo)
+    tail1_names: list[str] = []  # C21-C218 (catena sn-1)
+    tail2_names: list[str] = []  # C31-C316 (catena sn-2)
+    h_names: list[str] = []      # H* (idrogeni)
 
-    if resname == "POPC":
-        # N3 (colina)
-        h_n = (x, y, z_head)
-        # P sotto N
-        h_p = (x, y, z_head - BOND_CN)
-        # O1, O2 attorno a P (fossili del fosfato)
-        h_o1 = (x + BOND_PO, y, z_head - BOND_CN)
-        h_o2 = (x - BOND_PO, y, z_head - BOND_CN)
-        # C3 del glicerolo sotto P, collegato alla prima coda
-        h_c3 = (x, y + BOND_CO, z_head - BOND_CN - BOND_PO)
+    for name, _atype, _charge, _group in atoms_info:
+        if name in ("N3", "N") or name == "P" or (
+            name.startswith("O") and name not in ("O21", "O31", "O22", "O32")
+        ):
+            head_names.append(name)
+        elif name in ("C1", "C2", "C3"):
+            glycerol_names.append(name)
+        elif name.startswith("C2") and len(name) > 2:
+            tail1_names.append(name)
+        elif name.startswith("C3") and len(name) > 2:
+            tail2_names.append(name)
+        elif name.startswith("H"):
+            h_names.append(name)
+        else:
+            tail1_names.append(name)
 
-        head_atoms = [
-            ("N3",  h_n,  "N",  0.00),
-            ("P",   h_p,  "P",  0.00),
-            ("O1",  h_o1, "O", -0.50),
-            ("O2",  h_o2, "O", -0.50),
-            ("C3",  h_c3, "C",  0.00),
-        ]
-    elif resname == "CHOL":
-        # Colesterolo: testa OH + anelli (semplificato a 4 atomi chiave)
-        h_o3 = (x, y, z_head)          # ossigeno idrossile
-        h_c3 = (x, y, z_head - BOND_CO)  # carbonio C3
-        h_c1 = (x + BOND_CC, y, z_head - BOND_CO - BOND_CC)
-        h_c2 = (x - BOND_CC, y, z_head - BOND_CO - BOND_CC)
+    coords: dict[str, tuple[float, float, float]] = {}
 
-        head_atoms = [
-            ("O3", h_o3, "O", -0.50),
-            ("C3", h_c3, "C",  0.00),
-            ("C1", h_c1, "C",  0.00),
-            ("C2", h_c2, "C",  0.00),
-        ]
-    else:
-        # Generico: testa con N, P, O, C
-        h_n = (x, y, z_head)
-        h_p = (x, y, z_head - BOND_CN)
-        h_o1 = (x + BOND_PO, y, z_head - BOND_CN)
-        h_c3 = (x, y + BOND_CO, z_head - BOND_CN - BOND_PO)
+    # --- Testa polare ---
+    idx = 0
+    for name in head_names:
+        if name in ("N3", "N"):
+            coords[name] = (x, y, z_head)
+        elif name == "P":
+            coords[name] = (x, y, z_head - BOND_CN)
+        elif name.startswith("O"):
+            angle = idx * 2 * math.pi / max(len(head_names), 1)
+            coords[name] = (
+                x + BOND_PO * math.cos(angle),
+                y + BOND_PO * math.sin(angle),
+                z_head - BOND_CN,
+            )
+            idx += 1
 
-        head_atoms = [
-            ("N",  h_n,  "N",  0.00),
-            ("P",  h_p,  "P",  0.00),
-            ("O1", h_o1, "O", -0.50),
-            ("C3", h_c3, "C",  0.00),
-        ]
+    # --- Glicerolo ---
+    if "C1" in glycerol_names:
+        coords["C1"] = (x, y + BOND_CO, z_head - BOND_CN - BOND_PO)
+    if "C2" in glycerol_names:
+        coords["C2"] = (
+            x,
+            y + BOND_CO + BOND_CC * 0.5,
+            z_head - BOND_CN - BOND_PO - BOND_CC * 0.5,
+        )
+    if "C3" in glycerol_names:
+        coords["C3"] = (
+            x,
+            y + BOND_CO + BOND_CC,
+            z_head - BOND_CN - BOND_PO - BOND_CC,
+        )
 
-    for _i, (name, (ox, oy, oz), elem, _charge) in enumerate(head_atoms):
+    # --- Catena sn-1 (da C2: C21-C218) ---
+    cur = coords.get("C2", coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO)))
+    cur_x, cur_y, cur_z = cur
+    dir_x, dir_y, dir_z = math.sin(TAIL_TILT), 0.0, -math.cos(TAIL_TILT)
+    tail1_c_names = [n for n in tail1_names if n.startswith("C")]
+    for j, name in enumerate(tail1_c_names):
+        cur_x += dir_x * BOND_CC
+        cur_y += dir_y * BOND_CC
+        cur_z += dir_z * BOND_CC
+        rot = TETRA_RAD * 0.2 * (0.5 - (j % 3) / 3.0)
+        nx = cur_x + dir_x * math.cos(rot) - dir_y * math.sin(rot)
+        ny = cur_y + dir_x * math.sin(rot) + dir_y * math.cos(rot)
+        cur_x, cur_y = nx, ny
+        target_z = TAIL_END_Z if z_head > 0 else -TAIL_END_Z
+        if (z_head > 0 and cur_z < target_z) or (z_head < 0 and cur_z > target_z):
+            cur_z = target_z
+        coords[name] = (cur_x, cur_y, cur_z)
+
+    # --- Catena sn-2 (da C3: C31-C316) ---
+    tail2_c_names = [n for n in tail2_names if n.startswith("C")]
+    cur = coords.get("C3", coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO - BOND_CC)))
+    cur_x, cur_y, cur_z = cur
+    dir_x = math.sin(TAIL_TILT) * math.cos(math.pi / 4)
+    dir_y = math.sin(TAIL_TILT) * math.sin(math.pi / 4)
+    dir_z = -math.cos(TAIL_TILT)
+    for j, name in enumerate(tail2_c_names):
+        cur_x += dir_x * BOND_CC
+        cur_y += dir_y * BOND_CC
+        cur_z += dir_z * BOND_CC
+        rot = TETRA_RAD * 0.2 * (0.5 - (j % 3) / 3.0)
+        nx = cur_x + dir_x * math.cos(rot) - dir_y * math.sin(rot)
+        ny = cur_y + dir_x * math.sin(rot) + dir_y * math.cos(rot)
+        cur_x, cur_y = nx, ny
+        target_z = TAIL_END_Z if z_head > 0 else -TAIL_END_Z
+        if (z_head > 0 and cur_z < target_z) or (z_head < 0 and cur_z > target_z):
+            cur_z = target_z
+        coords[name] = (cur_x, cur_y, cur_z)
+
+    # --- Atomi di idrogeno: vicino al carbonio padre ---
+    for name in h_names:
+        parent_name = name[1:]
+        if parent_name in coords:
+            px, py, pz = coords[parent_name]
+        elif tail1_c_names:
+            px, py, pz = coords[tail1_c_names[-1]]
+        elif tail2_c_names:
+            px, py, pz = coords[tail2_c_names[-1]]
+        else:
+            px, py, pz = coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO))
+        coords[name] = (px + 0.05, py + 0.05, pz + 0.05)
+
+    # --- Scrive righe PDB nell'ordine degli atomi in lipid.rtp ---
+    for name, _atype, _charge, _group in atoms_info:
+        if name not in coords:
+            # Atomo senza coordinate: posiziona vicino a C1 come fallback
+            cx, cy, cz = coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO))
+            coords[name] = (cx + 0.05, cy + 0.05, cz + 0.05)
+        ox, oy, oz = coords[name]
+        elem = name[0]  # primo carattere come elemento (approssimativo)
         lines.append(
-            f"ATOM  {len(lines)+1:5d} {name:>4s} {resname:>4s}"
+            f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
             f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
             f"1.00  0.00          {elem:>2s}"
         )
-
-    # ------------------------------------------------------------------
-    # Code: catene di atomi C con angolo tetraedrico verso il centro
-    # ------------------------------------------------------------------
-    # Per POPC: 2 code (satura + insatura). Per gli altri: 1 coda.
-    if resname == "POPC":
-        n_tails = 2
-        atoms_per_tail = (n_atoms - len(head_atoms)) // 2
-    else:
-        n_tails = 1
-        atoms_per_tail = n_atoms - len(head_atoms)
-
-    for tail_idx in range(n_tails):
-        # Ogni coda parte dal C3 del glicerolo
-        start_x, start_y, start_z = head_atoms[-1][1]  # C3 posizione
-        # Direzione iniziale: verso il basso (z diminuisce) con leggera dispersione
-        dir_x = math.sin(TAIL_TILT) * math.cos(tail_idx * math.pi / n_tails)
-        dir_y = math.sin(TAIL_TILT) * math.sin(tail_idx * math.pi / n_tails)
-        dir_z = -math.cos(TAIL_TILT)
-
-        cur_x, cur_y, cur_z = start_x, start_y, start_z
-        prev_dir_x, prev_dir_y, prev_dir_z = dir_x, dir_y, dir_z
-
-        for j in range(atoms_per_tail):
-            # Applica angolo tetraedrico: la direzione cambia leggermente a ogni passo
-            if j > 0:
-                # ruota la direzione di un angolo casuale intorno all'asse z
-                rot = TETRA_RAD * 0.3 * (0.5 - (j % 3) / 3.0)
-                nx = (
-                    prev_dir_x * math.cos(rot)
-                    - prev_dir_y * math.sin(rot)
-                )
-                ny = (
-                    prev_dir_x * math.sin(rot)
-                    + prev_dir_y * math.cos(rot)
-                )
-                nz = prev_dir_z * 0.9  # leggera attenuazione verso il basso
-                norm = math.sqrt(nx * nx + ny * ny + nz * nz)
-                prev_dir_x, prev_dir_y, prev_dir_z = nx / norm, ny / norm, nz / norm
-
-            cur_x += prev_dir_x * BOND_CC
-            cur_y += prev_dir_y * BOND_CC
-            cur_z += prev_dir_z * BOND_CC
-
-            # forza z verso il centro se si allontana troppo
-            target_z = TAIL_END_Z if z_head > 0 else -TAIL_END_Z
-            if (z_head > 0 and cur_z < target_z) or (z_head < 0 and cur_z > target_z):
-                cur_z = target_z
-
-            lines.append(
-                f"ATOM  {len(lines)+1:5d} C{tail_idx+1}{j+1:>3}  {resname:>4s}"
-                f"{chain_id:1s}{resno:4d}    {cur_x:8.3f}{cur_y:8.3f}{cur_z:8.3f}  "
-                f"1.00  0.00          C"
-            )
 
     return lines
 
@@ -307,6 +416,28 @@ def generate_pdb(
         upper_positions = _circle_positions(sum(upper.values()), sheet_radius * 0.8)
         lower_positions = _circle_positions(sum(lower.values()), sheet_radius * 0.8)
 
+    # lista di specie per leaflet: assegnazione CASUALE specie<->posizione
+    # (mescolamento laterale reale: nelle membrane le specie sono distribuite
+    # in modo indipendente, non a settori contigui)
+    def _species_list(d: dict[str, int]) -> list[str]:
+        out: list[str] = []
+        for name in sorted(d):
+            out += [name] * d[name]
+        return out
+
+    upper_species = _species_list(upper)
+    lower_species = _species_list(lower)
+    if layout == "fluid":
+        # posizioni casuali + specie MESCOLATE con seed riproducibile
+        rng = random.Random(42)
+        rng.shuffle(upper_species)
+        rng2 = random.Random(7)
+        rng2.shuffle(lower_species)
+    else:
+        # griglia ordinata (debug CLI): specie raggruppate come prima
+        upper_species = _species_list(upper)
+        lower_species = _species_list(lower)
+
     # offset di centratura (sposta il centro di massa a 0,0 se richiesto)
     ox_off = oy_off = 0.0
     if center:
@@ -316,36 +447,26 @@ def generate_pdb(
             oy_off = -sum(p[1] for p in all_pos) / len(all_pos)
 
     # --- Foglio superiore ---
-    idx = 0
-    for resname in sorted(upper):
-        for _ in range(upper[resname]):
-            x, y = upper_positions[idx]
-            idx += 1
-            for line in _lipid_atom_lines(
-                resname, resno, x + ox_off, y + oy_off, HEAD_Z, "U",
-            ):
-                lines.append(line)
-            resno += 1
+    for idx, resname in enumerate(upper_species):
+        x, y = upper_positions[idx]
+        for line in _lipid_atom_lines(
+            resname, resno, x + ox_off, y + oy_off, HEAD_Z, "U",
+        ):
+            lines.append(line)
+        resno += 1
 
     # --- Foglio inferiore ---
-    idx = 0
-    for resname in sorted(lower):
-        for _ in range(lower[resname]):
-            x, y = lower_positions[idx]
-            idx += 1
-            for line in _lipid_atom_lines(
-                resname, resno, x + ox_off, y + oy_off, -HEAD_Z, "L",
-            ):
-                lines.append(line)
-            resno += 1
+    for idx, resname in enumerate(lower_species):
+        x, y = lower_positions[idx]
+        for line in _lipid_atom_lines(
+            resname, resno, x + ox_off, y + oy_off, -HEAD_Z, "L",
+        ):
+            lines.append(line)
+        resno += 1
 
     lines.append("END")
     return "\n".join(lines) + "\n"
 
-
-# ---------------------------------------------------------------------------
-# Generatore TOP e MDP
-# ---------------------------------------------------------------------------
 
 def generate_top(
     upper: dict[str, int],
@@ -354,33 +475,64 @@ def generate_top(
     ion_conc: float = 0.15,
     solvent: str = "water",
     ions: str = "KCl",
+    ff_path: str | None = None,
 ) -> str:
-    """Genera una topologia GROMACS scheletro (force field charmm36).
+    """Genera una topologia GROMACS completa con CHARMM36.
+
+    Usa le definizioni da lipid.rtp per atomi, bond e impropers di ogni
+    residuo lipidico.
 
     solvent: "water" -> aggiunge SOL, "none" -> nessuna acqua
     ions: "KCl"/"NaCl" -> aggiunge ioni, "none" -> nessun ione
+    ff_path: percorso alla directory charmm36.ff per gli include dei file .itp
     """
     lines: list[str] = []
     lines.append("; Topologia generata da make_bilayer.py (cgui-studio)")
-    lines.append("; Force field: charmm36 (verificare disponibilità in $GMXDATA/top)")
+    lines.append("; Force field: charmm36 (da lipid.rtp di MacKerell)")
     lines.append("")
-    lines.append('#include "charmm36.ff/forcefield.itp"')
+    if ff_path:
+        # Usa forcefield.itp che include tutti i file .itp nell'ordine corretto
+        ff_rel = Path(ff_path).name  # es. "charmm36.ff"
+        lines.append(f'#include "{ff_rel}/forcefield.itp"')
+    else:
+        lines.append('#include "charmm36.ff/forcefield.itp"')
+    # Includi tip3p.itp per SOL (acqua) e ions.itp per KCl/NaCl
+    if ff_path:
+        lines.append(f'#include "{ff_rel}/tip3p.itp"')
+        lines.append(f'#include "{ff_rel}/ions.itp"')
+    else:
+        lines.append('#include "charmm36.ff/tip3p.itp"')
+        lines.append('#include "charmm36.ff/ions.itp"')
     lines.append("")
 
     all_lipids = set(upper) | set(lower)
+
     for name in sorted(all_lipids):
+        rtp_name = LIPID_NAME_MAP.get(name, name)
+        residue = LIPID_RTP_DATA.get(rtp_name)
+
         lines.append("[ moleculetype ]")
         lines.append("; Name        nrexcl")
-        lines.append(f"{name}          3")
+        lines.append(f"{rtp_name}          3")
         lines.append("")
         lines.append("[ atoms ]")
         lines.append(
             "; nr   atype  resnr  residuum  atom   cgnr     charge   mass"
         )
-        for i in range(1, LIPID_ATOMS.get(name, 15) + 1):
+        if residue is not None:
+            atoms_info = residue["atoms"]
+        else:
+            # Residuo non in lipid.rtp: atomo generico
+            atoms_info = [(f"C{i+1}", "C", 0.0, 1) for i in range(LIPID_ATOMS.get(name, 15))]
+
+        for i, (name, atype, charge, group) in enumerate(atoms_info):
+            elem = name[0]
+            mass_map = {"C": 12.011, "N": 14.007, "O": 15.999,
+                        "P": 30.974, "S": 32.06, "H": 1.008}
+            mass = mass_map.get(elem, 12.011)
             lines.append(
-                f"{i:5d}   C       1      {name}     C{i}      1      "
-                f"0.00   12.000"
+                f"{i+1:5d}   {atype:>4s}  1      {rtp_name:>4s}  "
+                f"{name:>4s}  {group:>4d}   {charge:>6.3f}   {mass:>7.3f}"
             )
         lines.append("")
 
@@ -391,26 +543,14 @@ def generate_top(
     lines.append("[ molecules ]")
     lines.append("; Compound        #mols")
     for name in sorted(all_lipids):
+        rtp_name = LIPID_NAME_MAP.get(name, name)
         total_count = upper.get(name, 0) + lower.get(name, 0)
-        lines.append(f"{name:<16s} {total_count:6d}")
+        lines.append(f"{rtp_name:<16s} {total_count:6d}")
     lines.append("")
 
-    # Acqua (solo se solvent attivo)
-    if solvent == "water":
-        n_lipids = sum(upper.values()) + sum(lower.values())
-        n_water = max(1, int(n_lipids * 30))
-        lines.append(f"SOL             {n_water:6d}")
-
-    # Ioni (solo se ioni attivo e solvent attivo - senza acqua gli ioni non stanno)
-    if ions != "none" and solvent == "water":
-        n_lipids = sum(upper.values()) + sum(lower.values())
-        n_ions = max(1, int(n_lipids * ion_conc * 0.1))
-        if "/" in ions:
-            ion_cat, ion_an = ions.split("/")
-        else:
-            ion_cat, ion_an = ions, "CL"
-        lines.append(f"{ion_cat:<16s} {n_ions:6d}")
-        lines.append(f"{ion_an:<16s} {n_ions:6d}")
+    # Acqua e ioni vengono aggiunti da gmx solvate -p (che aggiorna il .top
+    # con il conteggio corretto), quindi NON li scriviamo qui.
+    # Questo evita mismatch tra topologia e coordinate.
     lines.append("")
 
     return "\n".join(lines) + "\n"
@@ -465,6 +605,46 @@ def find_gmx() -> str | None:
     return None
 
 
+def get_gromacs_version(gmx_path: str | None = None) -> tuple[int, int] | None:
+    """Rileva la versione di GROMACS eseguendo 'gmx --version'.
+
+    Restituisce una tupla (major, minor) o None se non disponibile.
+    """
+    gmx = gmx_path or find_gmx()
+    if not gmx:
+        return None
+    try:
+        result = subprocess.run(
+            [gmx, "--version"], capture_output=True, text=True, timeout=15
+        )
+        output = result.stdout + result.stderr
+        match = re.search(r"version\s+(\d+)\.(\d+)", output)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    except Exception:
+        pass
+    return None
+
+
+def check_gromacs_version(gmx_path: str | None = None) -> str | None:
+    """Controlla la compatibilità della versione di GROMACS rilevata.
+
+    Restituisce un messaggio di avviso se la versione è problematica,
+    None se va bene.
+    """
+    version = get_gromacs_version(gmx_path)
+    if version is None:
+        return "Impossibile rilevare la versione di GROMACS"
+    major, minor = version
+    if major < 2018:
+        return f"GROMACS {major}.{minor} è troppo vecchio (minimo 2018 consigliato)"
+    if major == 2020 and minor < 3:
+        return f"GROMACS {major}.{minor} potrebbe avere bug noti con grompp"
+    if major >= 2025:
+        return f"GROMACS {major}.{minor} è molto recente, verifica compatibilità"
+    return None
+
+
 def run_gmx(
     gmx: str,
     args: list[str],
@@ -477,6 +657,50 @@ def run_gmx(
         cmd, cwd=cwd, input=input_text,
         capture_output=True, text=True, timeout=300,
     )
+
+
+def _extract_charmm36_ff(system_dir: Path) -> None:
+    """Estrae i file CHARMM36 dal tarball in /tmp/charmm36.tgz nella directory system
+    del job, così che gmx grompp possa trovare forcefield.itp ecc."""
+
+    tar_path = Path("/tmp/charmm36.tgz")
+    target_dir = system_dir / "charmm36.ff"
+
+    if target_dir.exists():
+        return
+
+    if not tar_path.exists():
+        print(
+            "AVVISO: /tmp/charmm36.tgz non trovato. "
+            "gmx grompp potrebbe fallire senza i file charmm36.ff.",
+            file=sys.stderr,
+        )
+        return
+
+    with tarfile.open(tar_path, "r:gz") as tf:
+        # Estrai solo la directory charmm36-feb2026_cgenff-5.0.ff
+        members = [
+            m for m in tf.getmembers()
+            if m.name.startswith(
+                "toppar_c36_releases-main/gromacs/charmm36-feb2026_cgenff-5.0.ff/"
+            ) and not m.name.endswith("/")
+        ]
+        tf.extractall(system_dir, members=members)
+
+    # Rinomina la directory estratta in charmm36.ff
+    src = system_dir / "toppar_c36_releases-main" / "gromacs" / "charmm36-feb2026_cgenff-5.0.ff"
+    if src.exists() and not target_dir.exists():
+        shutil.move(str(src), str(target_dir))
+
+    # Rimuovi la directory intermediaria
+    intermediate = system_dir / "toppar_c36_releases-main"
+    if intermediate.exists():
+        shutil.rmtree(str(intermediate))
+
+    # Copia lipid.rtp nella directory system per l'include nel .top
+    lipid_rtp_src = Path("/tmp/opencode/lipid.rtp")
+    if lipid_rtp_src.exists():
+        shutil.copy(str(lipid_rtp_src), str(system_dir / "lipid.rtp"))
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +773,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--run-gmx", action="store_true",
-        help="Esegue gmx editconf/solvate se disponibile",
+        help="Esegue gmx editconf/solvate/grompp/mdrun se disponibile",
     )
     parser.add_argument(
         "--box-x", type=float, default=12.0,
@@ -586,12 +810,50 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["KCl", "NaCl", "none"],
         help="Ioni: KCl, NaCl o none",
     )
+    parser.add_argument(
+        "--lipid-rtp", type=str, default=LIPID_RTP_PATH,
+        help="Percorso al file lipid.rtp di CHARMM36 (default: /tmp/opencode/lipid.rtp)",
+    )
+    # --- Nuovi argomenti per supporto proteine, acidi nucleici, small molecules ---
+    parser.add_argument(
+        "--pdb", type=str, default=None,
+        help="File PDB o ID PDB di una proteina da inserire nel sistema",
+    )
+    parser.add_argument(
+        "--pdb-reader", action="store_true",
+        help="Usa PDB Reader di CHARMM-GUI per caricare la proteina (richiede API CHARMM-GUI)",
+    )
+    parser.add_argument(
+        "--dna", type=str, default=None,
+        help="Sequenza DNA da costruire (es. ATGC)",
+    )
+    parser.add_argument(
+        "--rna", type=str, default=None,
+        help="Sequenza RNA da costruire (es. AUGC)",
+    )
+    parser.add_argument(
+        "--small-mol", type=str, default=None,
+        help="File PDB/SDF di una small molecule da inserire",
+    )
+    parser.add_argument(
+        "--build-type", type=str, default="lipid",
+        choices=["lipid", "protein", "dna", "rna", "small-mol"],
+        help="Tipo di sistema da costruire (default: lipid)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+
+    # Ricarica lipid.rtp se specificato via CLI
+    global LIPID_RTP_DATA
+    if args.lipid_rtp != LIPID_RTP_PATH:
+        try:
+            LIPID_RTP_DATA = parse_lipid_rtp(args.lipid_rtp)
+        except Exception as exc:
+            print(f"AVVISO: impossibile caricare {args.lipid_rtp}: {exc}", file=sys.stderr)
 
     upper = parse_spec(args.upper) if args.upper else {}
     lower = parse_spec(args.lower) if args.lower else {}
@@ -626,6 +888,14 @@ def main(argv: list[str] | None = None) -> int:
     system_dir = outdir / "system"
     system_dir.mkdir(parents=True, exist_ok=True)
 
+    # Estrai i file CHARMM36 (forcefield) per grompp
+    _extract_charmm36_ff(system_dir)
+
+    # Copia lipid.rtp nella directory system per l'include nel .top
+    lipid_rtp_src = Path("/tmp/opencode/lipid.rtp")
+    if lipid_rtp_src.exists():
+        shutil.copy(str(lipid_rtp_src), str(system_dir / "lipid.rtp"))
+
     # --- PDB ---
     pdb_path = system_dir / "step1_pdbreader.pdb"
     pdb_content = generate_pdb(
@@ -641,6 +911,7 @@ def main(argv: list[str] | None = None) -> int:
         upper, lower,
         ion_type=args.ion_type, ion_conc=args.ion_conc,
         solvent=args.solvent, ions=args.ions,
+        ff_path=str(system_dir / "charmm36.ff"),
     )
     top_path.write_text(top_content)
 
@@ -658,7 +929,7 @@ Data: {datetime.now().isoformat()}
 Spec: upper={dict(upper)}, lower={dict(lower)}
 Box: {args.box_x} x {args.box_y} x {args.box_z} nm, centro={args.center}, layout={args.layout}
 Solvente: {args.solvent}, Ioni: {args.ions} ({args.ion_type} {args.ion_conc} M)
-Force field: charmm36 (scheletro - completare parametri prima di gmx grompp)
+Force field: charmm36 (da lipid.rtp di MacKerell)
 File:
   system/step1_pdbreader.pdb  struttura bilayer
   system/topol.top            topologia GROMACS
@@ -699,6 +970,44 @@ File:
                         print(f"AVVISO: gmx solvate fallito: {r.stderr[-500:]}", file=sys.stderr)
                     else:
                         print("gmx solvate: OK")
+                        # Esegue gmx grompp usando il sistema solvato come input
+                        solvated_gro_path = system_dir / "solvated.gro"
+                        minim_tpr = system_dir / "minim.tpr"
+                        r = run_gmx(
+                            gmx_path,
+                            [
+                                "grompp", "-f", str(mdp_path.resolve()),
+                                "-c", str(solvated_gro_path.resolve()),
+                                "-p", top_abs,
+                                "-o", str(minim_tpr.resolve()),
+                            ],
+                            cwd=system_dir,
+                        )
+                        if r.returncode != 0:
+                            print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
+                        else:
+                            print("gmx grompp: OK - minim.tpr pronto")
+                            # Esegue gmx mdrun per minimizzazione
+                            minim_trr = system_dir / "minim.trr"
+                            minim_gro = system_dir / "minim.gro"
+                            minim_edr = system_dir / "minim.edr"
+                            minim_log = system_dir / "minim.log"
+                            r = run_gmx(
+                                gmx_path,
+                                [
+                                    "mdrun", "-s", str(minim_tpr.resolve()),
+                                    "-o", str(minim_trr.resolve()),
+                                    "-c", str(minim_gro.resolve()),
+                                    "-e", str(minim_edr.resolve()),
+                                    "-g", str(minim_log.resolve()),
+                                ],
+                                cwd=system_dir,
+                            )
+                            if r.returncode != 0:
+                                warn = f"AVVISO: gmx mdrun fallito: {r.stderr[-500:]}"
+                                print(warn, file=sys.stderr)
+                            else:
+                                print("gmx mdrun: OK - minimizzazione completata")
         else:
             print("AVVISO: --run-gmx richiesto ma gmx non trovato nel PATH.", file=sys.stderr)
 
@@ -715,7 +1024,7 @@ File:
     print(f"  Lipidi totali: {sum(upper.values()) + sum(lower.values())}")
     print("  File: step1_pdbreader.pdb, topol.top, minim.mdp")
     if gmx_run:
-        print("  GROMACS: editconf/solvate eseguiti")
+        print("  GROMACS: editconf/solvate/grompp/mdrun eseguiti")
     return 0
 
 
