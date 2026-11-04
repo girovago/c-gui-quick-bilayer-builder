@@ -1,115 +1,110 @@
-# Fonti, verifiche e attribuzioni
+# SOURCES.md — Fonti e riferimenti per cgui-studio
 
-Questo progetto sta sopra l'**API REST ufficiale** di CHARMM-GUI
-(`https://charmm-gui.org/api`, documentazione:
-<https://www.charmm-gui.org/?doc=api>). La doc pubblica copre solo `login`,
-`check_status`, `download` e `quick_bilayer`: tutto il resto è stato ricavato da
-verifiche indipendenti e dal confronto con altri client, **mai** per assunzione.
+Questo documento elenca le fonti, le licenze e i riferimenti utilizzati nel progetto cgui-studio, inclusi il builder all-atom locale e l'integrazione con CHARMM-GUI.
 
-Ultimo aggiornamento delle verifiche: **24–26 ottobre 2026**.
+---
 
-## 1. Fatti verificati sul campo (nostri)
+## 1. API CHARMM-GUI
 
-| Fatto | Come è stato verificato |
-|---|---|
-| `POST /api/login` con credenziali errate risponde **404** con body testuale `No user or incorrect password!` (non 401, non JSON) | chiamata diretta |
-| `GET /api/check_status` senza token risponde **401** `{"error":"No token provided"}` con `Content-Type: text/html` | chiamata diretta |
-| `POST /api/quick_bilayer` senza `run_ffconverter=true` restituisce `"modules": "membuilder"` e **nessun input GROMACS** | submit reale, job `9285768142` |
-| `check_status` espone anche `rank` ("N job(s) ahead"), `rqinfo`, `hasTarFile`, `lastInpStep`: coda e avanzamento sono leggibili | job reale in coda (19 job davanti) |
-| Token scaduto/malformato → **403** `{"error":"Invalid token","detail":"Expired token"}` (non 401), `Content-Type: text/html` | chiamata diretta con token vecchio |
-| L'archivio scaricato ha una **coda ASCII** (lunghezza compressa) dopo lo stream gzip | ispezione del file scaricato |
-| La coda Redis del server è condivisa: 20 job in coda anche per una membrana 64+64 | `rqinfo` |
+| Fonte | URL | Licenza | Uso |
+|-------|-----|---------|-----|
+| CHARMM-GUI REST API ufficiale | https://www.charmm-gui.org/?doc=api | Uso accademico, citazione obbligatoria | Quick Bilayer, PDB Reader (non documentato pubblicamente), Membrane Builder |
+| CHARMM-GUI Lipid Library | https://charmm-gui.org/?doc=archive&lib=lipid | Licenza non esplicita in pagina, citazione obbligatoria | Template lipidici PDB all-atom |
+| CHARMM-GUI Forum | https://charmm-gui.org/forum | Supporto community | Segnalazioni infrastruttura, bug, endpoint non documentati |
 
-## 2. Bug trovato: `Ion_conc` / `Ion_type` maiuscoli sono ignorati
+**Nota**: La doc pubblica copre solo General + Quick Bilayer. PDB Reader non è documentato pubblicamente ma è richiesto per embeddare proteine.
 
-La documentazione ufficiale elenca `Ion_conc` e `Ion_type`. Il server **li
-accetta e li ignora**: qualunque valore si mandi, il sistema esce con
-**NaCl 0.15 M**. La prova è in `early-step2.2_ions_count.str` di un archivio
-generato con `Ion_type=KCl`, `Ion_conc=0.10`: conteneva NaCl 0.15.
+---
 
-I nomi che funzionano sono i **minuscoli** `ion_conc` / `ion_type`
-(confermato indipendentemente da `junepark6/cgui_api` e `X0bang/charmm-gui-cli`).
-In questo progetto: `Spec.to_form()` manda i minuscoli, e c'è un test che
-verifica che i maiuscoli **non** siano presenti nel form.
+## 2. Force field e template lipidici
 
-## 3. Altri repo esaminati (giro su GitHub, 24/10/2026)
+| Fonte | URL | Licenza | Uso |
+|-------|-----|---------|-----|
+| MacKerell Lab CHARMM36 | https://mackerell.umaryland.edu/charmm_ff.shtml | Uso accademico gratuito con registrazione | Force field CHARMM36, top_all36_lipid.rtf |
+| Lemkul-Lab toppar_c36_releases | https://github.com/Lemkul-Lab/toppar_c36_releases | Uso accademico, citazione obbligatoria | File `lipid.rtp` CHARMM36 per GROMACS (scaricato da qui, non da link non verificato) |
+| LipidBook | https://lipidbook.org/package/policy.html | Licenza per pacchetto (PDDL/CC-BY-SA/fair use) | Database lipidi, licenze per pacchetto |
 
-Query usate: `charmm-gui` (67 repo), `charmm_gui` (59), `charmmgui` (12),
-`charmm-gui api` (3). Quasi tutti i risultati sono workflow GROMACS o script
-personali; i soli progetti che parlano davvero con l'API sono questi.
+---
 
-### `junepark6/cgui_api` — toolkit ufficiale (Im Lab), **nessuna licenza**
-Bash + Python, login/`quick_bilayer`/`check_status`/`download`, cronologia job in
-JSON/SQLite. **Non integrato come codice** (assenza di licenza = nessun diritto di
-copia). Usato come **riferimento fattuale** per i nomi dei parametri e per la
-conferma che il token è utilizzabile da client terzi.
+## 3. Strumenti di costruzione membrane (riferimenti)
 
-### `ovcarj/aiida-charmm-gui` — **MIT**, 0★, ultimo push 2026-06-09
-Plugin AiiDA (`aiida-charmm-gui` su PyPI) con `client.py` + workflow
-`QuickBilayerWorkflow`. **Integrato come idea, non copiato**: separazione
-`client`/`workflow`, eccezioni tipizzate, token con scadenza in cache.
-Non usiamo AiiDA: sarebbe un database di provenance pesante per un uso
-interattivo. Il nostro equivalente leggero è `store.py` (SQLite + `manifest.json`).
+| Progetto | URL | Licenza | Note |
+|----------|-----|---------|------|
+| OpenMembraneBuilder | https://github.com/lolicato/OpenMembraneBuilder | AGPL-3.0 | GUI Streamlit, Martini CG only |
+| PACKMOL-Memgen | Parte di AmberTools | Licenza AmberTools | All-atom bilayer builder |
+| INSANE | https://github.com/afarangia/INSANE | Licenza varia | Membrane CG builder |
+| PACKMOL-GUI | Plugin VCF | Licenza varia | Packing molecolare 3D in VCF |
 
-### `X0bang/charmm-gui-cli` — **GPL-3.0**, 1★, ultimo push 2026-10-15
-CLI cinese per sistemi membrana-proteina-ligando, con un `RESEARCH.md` di
-verifiche reali. **Solo fatti, nessun codice** (GPL-3.0 contagierebbe il progetto,
-che è MIT). Fatti presi:
+---
 
-- i parametri ioni viaggiano **minuscoli** (vedi §2);
-- il **PDB Reader non ha endpoint pubblico**: l'unica via programmatica è il
-  login al **form web** (`POST ?doc=sign` con `do=login`, `email`, `password` →
-  cookie di sessione) + upload del PDB via HTTP; il `jobid` risultante si passa a
-  Quick Bilayer con `clone_job`;
-- il 401 può avere `Content-Type: text/html`: non fidarsi del MIME;
-- il token è usabile da qualunque client (nessuna firma applicativa).
+## 4. Area per lipide (APL) — riferimenti scientifici
 
-Nel nostro core il PDB Reader è **fuori scope per scelta**: `Spec` accetta
-`clone_job_from` (jobid già esistente) e rifiuta `membrane_only=False` senza di
-esso, spiegando perché. L'automazione del form web è un modulo futuro, separato,
-perché fragile (dipende dall'HTML del sito, non da un contratto).
+| Riferimento | Contenuto |
+|-------------|-----------|
+| Kucerka et al. (2011) | Area per lipide di fosfolipidi comuni (POPC, DOPC, DPPC…) a ~303 K |
+| Ingólfsson et al. (2014) | Composizione membrane plasmatica mammaliana, organelli; APL per PE, PS, PI, cardiolipina |
 
-### `ChenyanLiao/CHARMM-GUI-System-Builder` — **AGPL-3.0**, skill per agenti
-Contiene `docs/API_CAPABILITY_REGISTRY.md`, la ricognizione più onesta che ho
-trovato: elenca come **ufficiali** solo login/status/download/quick_bilayer e
-marca PDB Reader, Ligand Reader, Membrane Builder e Solution Builder come
-**"Audited browser"** (nessun endpoint confermato). **Solo fatti, nessun codice**
-(AGPL-3.0). Conferma la nostra scelta di scope.
+Usati per dimensionare i foglietti con densità fisica (`APL_NM2` in `scripts/make_bilayer.py`).
 
-### `Chris-FIFI/lamellyx` — **MIT**, builder locale
-Costruisce bilayer e sistemi membrana-proteina **in locale** per GROMACS, senza
-CHARMM-GUI. Non integrato (risolve un altro problema: chi vuole l'output
-CHARMM-GUI non lo ottiene da lì). Resta un'alternativa da citare.
+---
 
-### `TiefengSong/Auto-CHARMMGUI-Builder` — automazione browser
-Automazione via browser, senza licenza esplicita. **Non integrato.**
+## 5. File includi nel progetto
 
-### Concorrenti su altri binari (per contesto, non integrati)
-- `lolicato/OpenMembraneBuilder` — Streamlit, MARTINI/coarse-grained, AGPL.
-- `franciscoadasme/gatewizard-gui` — Electron+Svelte, AmberTools, altra API.
-- `madsondeluna/bilbo` — CLI/web FastAPI, bilayer da template PDB.
-- `nk53/auto_cgui` — Selenium su quasi tutti i moduli (incluso PDB Reader), RAM
-  pesante, max 4 job concorrenti.
-- `AmandaStange/CharmmGuiAuto` — YAML → Selenium, solo Firefox.
+### NGL View (vendored in `web/public/vendor/ngl.js`)
 
-## 4. Cosa NON facciamo e perché
+| File | Fonte | Licenza |
+|------|-------|---------|
+| ngl.js (UMD 2.5.0) | https://github.com/arose/ngl | MIT |
+| NGL-LICENSE | https://github.com/arose/ngl/blob/master/LICENSE | MIT |
 
-| Non facciamo | Motivo |
-|---|---|
-| PDB Reader automatico | nessun endpoint pubblico; il form web è fragile e va isolato |
-| Ligand Reader / CGenFF | idem, e serve un file mol2 con parametri |
-| Automazione browser (Selenium/Playwright) | dipendenza pesante, fragile, e l'API copre il caso d'uso principale |
-| Riscrittura locale del builder lipidico | è esattamente il lavoro che il server fa meglio (e che `lamellyx` fa già) |
+### Trajectory kit (trajkit)
 
-## 5. Attribuzione NGL (vendored)
+Progetto separato in `/home/giorgio/Documenti/trajkit` — CLI per analisi traiettorie MD (info, rmsd, rmsf, rg, sasa, hbonds, ligdist, convert, report).
 
-`web/public/vendor/ngl.js` è una **copia vendORIZED** di [NGL View](https://github.com/nglviewer/ngl)
-(nglviewer, Alexander Rose et al.), **MIT**, versione `2.5.0` dalla dist
-ufficiale del pacchetto npm `ngl` (UMD standalone con three.js incluso). La
-copia è servita localmente da FastAPI/Vite (nessun CDN). Licenza originale in
-`web/public/vendor/NGL-LICENSE`.
+Backend: mdtraj + MDAnalysis + numpy puro.
 
-## 6. Licenza
+Licenza: MIT.
 
-`cgui-studio` è **MIT**. Nessun codice GPL/AGPL è stato copiato: i progetti con
-licenza copyleft sono citati solo come fonte di fatti verificabili.
+---
+
+## 6. Fonti per il builder all-atom (`scripts/make_bilayer.py`)
+
+Questo progetto **non include** codice copyleft da progetti terzi. I file `lipid.rtp` e `forcefield.itp` di CHARMM36 sono scaricati dal repository ufficiale di Lemkul-Lab (GitHub) o dal sito MacKerell, e inclusi nel progetto solo per uso locale con le relative licenze.
+
+### Fonti consultate:
+
+- **CHARMM-GUI lipid.rtp**: https://github.com/Lemkul-Lab/toppar_c36_releases — repository ufficiale con file `.rtp` per GROMACS (branch `main`, directory `gromacs/charmm36-feb2026_cgenff-5.0.ff/`)
+- **MacKerell CGenFF**: https://mackerell.umaryland.edu/charmm_ff.shtml — force field CHARMM36 completo
+- **RCSB PDB**: https://www.rcsb.org/ — database strutture proteiche e lipidi (PDB ID per lipidi singoli non sempre disponibili)
+- **RCSB PDB Search API**: https://search.rcsb.org/rcsbsearch/v2/query — API per ricerca strutture
+
+---
+
+## 7. Licenze del progetto
+
+| Componente | Licenza | Note |
+|------------|---------|------|
+| cgui-studio (codice Python, Svelte, documentazione) | MIT | Codice originale di Giorgio Veneruso |
+| NGL View (vendored) | MIT | Vendored in `web/public/vendor/` |
+| CHARMM-GUI API | Uso accademico | Citazione obbligatoria, citare Park & Im (JMB 2026) |
+| CHARMM36 force field | Accademico gratuito | Registrazione richiesta su mackerell.umaryland.edu |
+| LipidBook | Per-pacchetto | Vedere lipidbook.org/package/policy.html |
+| CHARMM-GUI Lipid Library | Non esplicita | Citazione obbligatoria |
+
+---
+
+## 8. Riferimenti scientifici
+
+- Park, S.J. & Im, W. (2026). CHARMM-GUI Quick Bilayer. *Journal of Molecular Biology*.
+- MacKerell, A.D. et al. (2004). All-atom empirical force field for nucleic acids. *J. Comput. Chem.*
+- Klauda, J.B. et al. (2010). Update of CHARMM all-atom additive force field for lipids. *J. Phys. Chem. B*.
+- Kucerka, N. et al. (2011). Structure of fully hydrated fluid-phase lipid bilayers with monounsaturated chains. *Biochim. Biophys. Acta*.
+- Ingólfsson, H.I. et al. (2014). Lipid organization of the plasma membrane. *J. Am. Chem. Soc.*
+
+---
+
+## 9. Contatti e segnalazioni
+
+- Forum CHARMM-GUI: https://charmm-gui.org/forum (account phpBB, cookie phpbb3_8fjan)
+- Dr. Wonpil Im (CHARMM-GUI): email non esposta in pagina, contattare via forum o istituzione accademica
+- Giorgio Veneruso: giorgi.veneruso@studenti.unina.it (account istituzionale)

@@ -58,7 +58,13 @@
   }
 
   // prima riga pre-tondita dal wizard: comodo punto di partenza
-  addRow({ upper: form.upper, lower: form.lower });
+  let _initialized = $state(false);
+  $effect(() => {
+    if (!_initialized) {
+      _initialized = true;
+      addRow({ upper: form.upper, lower: form.lower });
+    }
+  });
 
   function removeRow(i) {
     rows.splice(i, 1);
@@ -202,9 +208,18 @@
 </script>
 
 <div class="flex min-h-0 flex-col" aria-label="Coda batch">
+  <div class="mb-2 rounded border border-cyan-300 bg-cyan-50 p-2 text-[11px] leading-snug text-cyan-800">
+    <p class="font-semibold">a cosa serve il batch</p>
+    <p>
+      componi più varianti (es. POPC puro vs POPC+CHOL) e il pannello le esegue in sequenza, una
+      alla volta; ogni riga completata viene scaricata ed estratta in
+      <code>results/&lt;data&gt;_&lt;label&gt;_&lt;jobid&gt;/</code> con manifest sha256 delle origini.
+    </p>
+  </div>
   <p class="mb-2 text-[11px] leading-snug text-zinc-500">
     le impostazioni comuni (membrane_only, run_ffconverter, ioni, wdist) sono quelle del wizard ·
-    le righe girano UNA ALLA VOLTA · la coda locale vive finché non chiudi la pagina
+    upper/foglio superiore, lower/foglio inferiore — righe <code>NOME=count</code> (es.
+    <code>POPC=48;CHOL=16</code>, separatore «;») · la coda locale vive finché non chiudi la pagina
   </p>
 
   {#if rows.length === 0}
@@ -329,7 +344,7 @@
     >
       + aggiungi riga
     </button>
-    <label class="flex items-center gap-1 text-xs text-zinc-700">
+    <label class="flex items-center gap-1 text-xs text-zinc-700" title="Dopo stato done, scarica ed estrae ogni job prima di passare al successivo">
       <input type="checkbox" class="accent-cyan-500" bind:checked={autoFetch} />
       scarica ed estrai quando finito
     </label>
@@ -342,6 +357,7 @@
       onclick={start}
       disabled={!canStart}
       aria-disabled={!canStart}
+      title="Invia le composizioni una alla volta (gentile con il server): ogni riga diventa un job"
     >
       Avvia batch
     </button>
@@ -350,6 +366,7 @@
         type="button"
         class="rounded border border-red-400 px-3 py-1.5 text-sm text-red-800 hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
         onclick={stopRun}
+        title="Interrompe la coda locale al completamento della riga in corso: i job GIÀ inviati non vengono ritirati"
       >
         Ferma
       </button>
@@ -358,6 +375,7 @@
         type="button"
         class="rounded border border-cyan-400 px-3 py-1.5 text-sm text-cyan-800 hover:bg-cyan-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
         onclick={start}
+        title="Continua dalla prima riga non ancora completata, senza ri-inviare quelle fatte"
       >
         Riprendi dalla riga {firstPending + 1} (salta le completate)
       </button>
