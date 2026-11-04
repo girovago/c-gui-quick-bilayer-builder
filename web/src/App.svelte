@@ -401,7 +401,7 @@
       </div>
 
       <div class={panel !== "single" && "hidden"} role="tabpanel" aria-label="Wizard singolo">
-        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} buildLog={buildLog} buildMetrics={buildMetrics} onLogClear={() => (buildLog = "")} />
+        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} buildLog={buildLog} buildMetrics={buildMetrics} onLogClear={() => (buildLog = "")} localBusy={localBusy} />
       </div>
 
       <!-- BatchPanel resta MONTATO anche nei tab in cui non è visibile (class:hidden,

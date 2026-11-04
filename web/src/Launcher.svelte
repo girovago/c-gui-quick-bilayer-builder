@@ -5,7 +5,7 @@
   // esiste una scelta "griglia/mosaico" nella UI.
   import { LIPID_CATALOG, LIPID_CATEGORIES } from "./lipidCatalog.js";
 
-  const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear } = $props();
+  const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy } = $props();
 
   const SUPPORTED_LOCAL = new Set([
     "POPC", "CHOL", "POPE", "DPPC", "DSPC", "DOPS", "DOTAP", "SM",
@@ -53,8 +53,6 @@
   let centerStructure = $state(true);
   let solvent = $state("water");
   let ions = $state("KCl");
-
-  let localBusy = $state(false);
 
   const PRESETS = {
     plasma: { label: "Plasma mammaliana (CHOL 35%)", upper: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 }, lower: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 } },
@@ -305,6 +303,12 @@
   <!-- STEP 2: composizione -->
   {#if step === 2}
     <div class="rounded-xl border border-zinc-200 bg-white p-4">
+      {#if buildType !== "lipid"}
+        <div class="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+          <span class="font-semibold">⚠️ Builder locale: testato solo per lipidi.</span>
+          Per proteine, acidi nucleici e small molecules il build locale è <b>sperimentale</b>. I file caricati non vengono inviati al server (viene trasmesso solo il nome). Usa <b>PDB ID</b> oppure <b>Invia a CHARMM-GUI</b> per queste molecole.
+        </div>
+      {/if}
       {#if buildType === "lipid"}
         <!-- simmetria -->
         <div class="mb-3 flex items-center gap-3 rounded-lg bg-zinc-50 p-2.5">
@@ -482,6 +486,12 @@
   <!-- STEP 4: riepilogo -->
   {#if step === 4}
     <div class="rounded-xl border border-zinc-200 bg-white p-4">
+      {#if buildType !== "lipid"}
+        <div class="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+          <span class="font-semibold">⚠️ Builder locale: testato solo per lipidi.</span>
+          Per proteine, acidi nucleici e small molecules il build locale è <b>sperimentale</b>. I file caricati non vengono inviati al server (viene trasmesso solo il nome). Usa <b>PDB ID</b> oppure <b>Invia a CHARMM-GUI</b> per queste molecole.
+        </div>
+      {/if}
       <div class="rounded-lg bg-zinc-50 p-3 font-mono text-xs leading-relaxed text-zinc-700">
         {#if buildType === "lipid"}
           <div><span class="text-zinc-400">superiore:</span> {specString(upperCounts) || "—"}</div>
@@ -550,8 +560,13 @@
       {/if}
 
       <div class="mt-4 flex flex-col gap-2 sm:flex-row">
-        <button type="button" class="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:bg-zinc-300" onclick={create} disabled={localBusy}>
-          {localBusy ? "Costruzione in corso…" : "▶ Crea struttura (locale, GROMACS)"}
+        <button type="button" class="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:bg-zinc-300" onclick={create} disabled={propLocalBusy || !stepValid()}>
+          {#if propLocalBusy}
+            <span class="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></span>
+            Costruzione in corso…
+          {:else}
+            ▶ Crea struttura (locale, GROMACS)
+          {/if}
         </button>
         <button type="button" class="flex-1 rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-500" onclick={submit}>
           Invia a CHARMM-GUI
