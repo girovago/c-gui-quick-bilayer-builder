@@ -5,7 +5,7 @@
   // esiste una scelta "griglia/mosaico" nella UI.
   import { LIPID_CATALOG, LIPID_CATEGORIES } from "./lipidCatalog.js";
 
-  const { onCreate, onSubmit } = $props();
+  const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear } = $props();
 
   const SUPPORTED_LOCAL = new Set([
     "POPC", "CHOL", "POPE", "DPPC", "DSPC", "DOPS", "DOTAP", "SM",
@@ -55,6 +55,30 @@
   let ions = $state("KCl");
 
   let localBusy = $state(false);
+
+  const PRESETS = {
+    plasma: { label: "Plasma mammaliana (CHOL 35%)", upper: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 }, lower: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 } },
+    er:     { label: "Reticolo endoplasmatico (PE alto)", upper: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 }, lower: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 } },
+    mito:   { label: "Mitochondriale interna (cardiolipina)", upper: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 }, lower: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 } },
+    popc:   { label: "POPC puro (controllo)", upper: { POPC: 64 }, lower: { POPC: 64 } },
+  };
+
+  const chargeColor = $derived(
+    buildMetrics
+      ? buildMetrics.net_lipid_charge_e !== 0
+        ? "text-red-600"
+        : "text-zinc-600"
+      : "text-zinc-600"
+  );
+
+  
+  function applyPreset(key) {
+    const p = PRESETS[key];
+    if (!p) return;
+    symmetric = true;
+    upperCounts = { ...p.upper };
+    lowerCounts = { ...p.lower };
+  }
 
   function goto(n) {
     if (n <= maxVisited) step = n;
@@ -157,6 +181,54 @@
     };
   }
 
+  function saveJson() {
+    const data = {
+      buildType,
+      upper: upperCounts,
+      lower: symmetric ? upperCounts : lowerCounts,
+      symmetric,
+      boxX, boxY, boxZ, centerStructure, solvent, ions,
+      proteinPdbId, dnaSequence, rnaSequence,
+      created: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cgui_composizione_${new Date().toISOString().slice(0, 16)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function loadJson(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const d = JSON.parse(String(ev.target.result));
+        buildType = d.buildType ?? buildType;
+        upperCounts = d.upper ?? {};
+        lowerCounts = d.lower ?? {};
+        symmetric = d.symmetric ?? true;
+        boxX = d.boxX ?? boxX;
+        boxY = d.boxY ?? boxY;
+        boxZ = d.boxZ ?? boxZ;
+        centerStructure = d.centerStructure ?? centerStructure;
+        solvent = d.solvent ?? solvent;
+        ions = d.ions ?? ions;
+        proteinPdbId = d.proteinPdbId ?? "";
+        dnaSequence = d.dnaSequence ?? "";
+        rnaSequence = d.rnaSequence ?? "";
+        step = 4;
+        maxVisited = 4;
+      } catch {
+        window.alert("JSON non valido");
+      }
+    };
+    reader.readAsText(file);
+  }
+
   function create() {
     if (!stepValid()) return;
     const p = params();
@@ -249,6 +321,19 @@
             onclick={() => { symmetric = false; }}
             aria-pressed={!symmetric}
           >Indipendente (asimmetrico)</button>
+        </div>
+
+        <!-- Preset membrane -->
+        <div class="mb-3 flex flex-wrap gap-2 rounded-lg bg-zinc-50 p-2">
+          <span class="text-xs font-medium text-zinc-600">Preset:</span>
+          {#each Object.entries(PRESETS) as [key, p] (key)}
+            <button
+              type="button"
+              class="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs text-zinc-700 hover:bg-cyan-50 hover:border-cyan-300 transition-colors"
+              onclick={() => applyPreset(key)}
+              title={p.label}
+            >{key}</button>
+          {/each}
         </div>
 
         {#if !symmetric}
@@ -413,6 +498,57 @@
         <div class="mt-1"><span class="text-zinc-400">box:</span> {boxX}×{boxY}×{boxZ} nm · centratura: {centerStructure ? "sì" : "no"}</div>
         <div><span class="text-zinc-400">solvente:</span> {solvent === "water" ? "acqua TIP3P" : "nessuno"} · <span class="text-zinc-400">ioni:</span> {ions}</div>
       </div>
+
+      <!-- Metriche post-build -->
+      {#if buildMetrics}
+        <div class="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="text-emerald-700 font-semibold text-xs">📊 Metriche build</span>
+          </div>
+          <div class="grid grid-cols-2 gap-3 text-xs">
+            <div><span class="text-zinc-500">Spessore P-P:</span> <span class="font-mono">{buildMetrics.thickness_P_nm} nm</span></div>
+            <div><span class="text-zinc-500">APL misurata:</span> <span class="font-mono">{buildMetrics.apl_measured_nm2} nm²</span></div>
+            <div><span class="text-zinc-500">APL attesa:</span> <span class="font-mono">{buildMetrics.apl_expected_nm2} nm²</span></div>
+            <div><span class="text-zinc-500">Acqua/lipide:</span> <span class="font-mono">{buildMetrics.water_per_lipid}</span></div>
+            <div><span class="text-zinc-500">Carica lipidi:</span> <span class={`font-mono ${chargeColor}`}>{buildMetrics.net_lipid_charge_e.toFixed(2)} e</span></div>
+            <div><span class="text-zinc-500">Atomi totali:</span> <span class="font-mono">{buildMetrics.natoms}</span></div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Salva / carica composizione -->
+      <div class="mt-4 rounded-lg bg-zinc-50 p-3">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-zinc-600 font-semibold text-xs">💾 Composizione</span>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <button
+            type="button"
+            onclick={saveJson}
+            class="flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-100"
+          >Scarica JSON</button>
+          <label class="flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-100 cursor-pointer">
+            Carica JSON
+            <input type="file" accept=".json" class="hidden" onchange={loadJson} />
+          </label>
+        </div>
+      </div>
+
+      <!-- Log build -->
+      {#if buildLog}
+        <div class="mt-4 rounded-lg bg-zinc-900 p-3 max-h-48 overflow-y-auto">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-cyan-400 font-bold text-[10px]">LOG GROMACS</span>
+            <button
+              type="button"
+              onclick={onLogClear}
+              class="text-zinc-500 hover:text-white"
+            >✕</button>
+          </div>
+          <pre class="text-[10px] text-zinc-300 overflow-x-auto">{buildLog}</pre>
+        </div>
+      {/if}
+
       <div class="mt-4 flex flex-col gap-2 sm:flex-row">
         <button type="button" class="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:bg-zinc-300" onclick={create} disabled={localBusy}>
           {localBusy ? "Costruzione in corso…" : "▶ Crea struttura (locale, GROMACS)"}

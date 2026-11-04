@@ -37,6 +37,8 @@
   let toast = $state(null);
   let busy = $state(false);
   let localBusy = $state(false);
+  let buildLog = $state("");
+  let buildMetrics = $state(null);
   let previewOpen = $state(false);
   let previewData = $state(null);
   let mockMode = $state(false);
@@ -191,6 +193,8 @@
         body: JSON.stringify(body),
       });
       flash("ok", `Struttura locale: ${res.jobid} · ${res.files.length} file`);
+      buildLog = res.log ?? "";
+      buildMetrics = res.metrics ?? null;
       selectedId = res.jobid;
       detail = null;
       await refreshDetail();
@@ -397,7 +401,7 @@
       </div>
 
       <div class={panel !== "single" && "hidden"} role="tabpanel" aria-label="Wizard singolo">
-        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} />
+        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} buildLog={buildLog} buildMetrics={buildMetrics} onLogClear={() => (buildLog = "")} />
       </div>
 
       <!-- BatchPanel resta MONTATO anche nei tab in cui non è visibile (class:hidden,

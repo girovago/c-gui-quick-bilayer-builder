@@ -426,12 +426,18 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         manifest_path = outdir_path / "manifest.json"
         manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
 
+        # Metriche fisiche post-build (se calcolate)
+        metrics_path = system_dir / "metrics.json"
+        metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else None
+
         return {
             "jobid": jobid,
             "outdir": str(outdir_path),
             "system_dir": str(system_dir),
             "files": files,
             "manifest": manifest,
+            "log": (res.stdout + "\n" + res.stderr).strip() or "nessun output",
+            "metrics": metrics,
         }
 
     @app.get("/", include_in_schema=False)

@@ -48,6 +48,35 @@ HEAD_Z = 2.6          # posizione teste polari (fuori dal bilayer)
 TAIL_END_Z = 0.2      # estremità code (verso centro bilayer)
 LIPID_RADIUS = 0.55   # raggio occupato da un lipide nel piano xy (nm)
 
+# Area per lipide (nm^2) a ~303 K — Kucerka et al. 2011, Ingólfsson et al. 2014.
+# Usata per dimensionare i foglietti con densità realistica per composizione.
+APL_NM2 = {
+    "POPC": 0.683, "DOPC": 0.725, "DPPC": 0.629, "DMPC": 0.604,
+    "DLPC": 0.597, "DSPC": 0.635, "DPPS": 0.60, "PLPC": 0.62,
+    "POPE": 0.55, "DOPE": 0.644, "DPPE": 0.512, "PE": 0.55,
+    "CHL1": 0.28, "PSM": 0.53, "SM": 0.53, "NSM": 0.53, "OSM": 0.53,
+    "POPS": 0.62, "DOPS": 0.65, "POPA": 0.56, "POPG": 0.60, "POPI": 0.58,
+    "TOCL1": 1.20, "TLCL1": 1.20,
+}
+DEFAULT_APL = 0.62
+APL_HEADGROUP_FALLBACK = {
+    "PC": 0.66, "PE": 0.56, "PS": 0.62, "PA": 0.56, "PG": 0.60, "PI": 0.58,
+}
+
+
+def apl_for(name: str) -> float:
+    """Area per lipide (nm^2) per specie; fallback sul gruppo (suffisso)."""
+    if name in APL_NM2:
+        return APL_NM2[name]
+    mapped = LIPID_NAME_MAP.get(name, name)
+    if mapped in APL_NM2:
+        return APL_NM2[mapped]
+    for suf, val in APL_HEADGROUP_FALLBACK.items():
+        if mapped.endswith(suf):
+            return val
+    return DEFAULT_APL
+
+
 # Distanze legame tipiche (nm)
 BOND_CC = 0.154
 BOND_CO = 0.143
@@ -64,9 +93,12 @@ LIPID_ATOMS = {
     "DOPC": 21,
     "DPPC": 21,
     "POPE": 20,
+    "POPS": 23,
     "DOPS": 22,
     "DOTAP": 23,
     "SM": 28,
+    "PSM": 28,
+    "POPI": 20,
 }
 
 # Lipid per cui abbiamo dati in lipid.rtp
@@ -85,7 +117,7 @@ LIPID_NAME_MAP = {
 # Parsing lipid.rtp CHARMM36 (atomi, bond, impropers per ogni residuo)
 # ---------------------------------------------------------------------------
 
-LIPID_RTP_PATH = "/tmp/opencode/lipid.rtp"
+LIPID_RTP_PATH = str(Path.home() / ".local" / "share" / "cgui-studio" / "lipid.rtp")
 
 
 def parse_lipid_rtp(path: str) -> dict:
@@ -208,6 +240,131 @@ def _random_positions(n: int, radius: float, seed: int = 42) -> list[tuple[float
     return positions
 
 
+def _sterane_offsets() -> dict[str, tuple[float, float]]:
+    """Coordinate (u,v) del backbone del colesterolo CHL1 (piano locale).
+
+    3 anelli esagonali fused + pentagono, OH sul C3 (verso l'acqua),
+    catena isoottile dal C17 (verso il core). Lato = 0.154 nm.
+    u = nel piano del foglietto, v = lungo la normale alla membrana.
+    """
+    R = 0.154  # lato/raggio circumcerchio dell'esagono (nm)
+
+    def hexv(cx: float, cz: float, theta_deg: float) -> tuple[float, float]:
+        t = math.radians(theta_deg)
+        return (cx + R * math.cos(t), cz + R * math.sin(t))
+
+    pos: dict[str, tuple[float, float]] = {}
+    # --- Ring A: C1-C2-C3-C4-C5-C10 (centro (0,0)) ---
+    ring_a = {"C1": 150, "C2": 90, "C3": 30, "C4": 330, "C5": 270, "C10": 210}
+    for name, th in ring_a.items():
+        pos[name] = hexv(0.0, 0.0, th)
+    # --- Ring B: C5-C6-C7-C8-C9-C10 (fused su lato C5-C10, sotto) ---
+    cB = (2 * ((pos["C5"][0] + pos["C10"][0]) / 2), 2 * ((pos["C5"][1] + pos["C10"][1]) / 2))
+    ring_b = {"C6": 330, "C7": 270, "C8": 210, "C9": 150}
+    for name, th in ring_b.items():
+        pos[name] = hexv(cB[0], cB[1], th)
+    # --- Ring C: C9-C11-C12-C13-C14-C8 (fused su lato C8-C9, a sinistra) ---
+    cC = (2 * ((pos["C8"][0] + pos["C9"][0]) / 2) - cB[0],
+          2 * ((pos["C8"][1] + pos["C9"][1]) / 2) - cB[1])
+    ring_c = {"C11": 90, "C12": 150, "C13": 210, "C14": 270}
+    for name, th in ring_c.items():
+        pos[name] = hexv(cC[0], cC[1], th)
+    # --- Ring D (pentagono): C13-C14-C15-C16-C17 (fused su lato C13-C14) ---
+    lat_cx = (pos["C13"][0] + pos["C14"][0]) / 2
+    lat_cz = (pos["C13"][1] + pos["C14"][1]) / 2
+    apP = 0.154 / (2 * math.tan(math.radians(36)))
+    nx = lat_cx - cC[0]
+    nz = lat_cz - cC[1]
+    nl = math.sqrt(nx * nx + nz * nz)
+    cD = (lat_cx + nx / nl * apP, lat_cz + nz / nl * apP)
+    # C13/C14 sono vertici condivisi: angoli dal centro D
+    a14 = math.atan2(pos["C14"][1] - cD[1], pos["C14"][0] - cD[0])
+    a13 = math.atan2(pos["C13"][1] - cD[1], pos["C13"][0] - cD[0])
+    # pentagono gira dal lato condiviso verso l'esterno (direzione normale)
+    step = -math.radians(72) if (a13 - a14) % (2 * math.pi) > math.pi else math.radians(72)
+    pos["C15"] = hexv(cD[0], cD[1], math.degrees(a14 + step))
+    pos["C16"] = hexv(cD[0], cD[1], math.degrees(a14 + 2 * step))
+    pos["C17"] = hexv(cD[0], cD[1], math.degrees(a14 + 3 * step))
+    # --- Metili anello ---
+    pos["C18"] = (pos["C13"][0] - 0.09, pos["C13"][1] - 0.12)
+    pos["C19"] = (pos["C10"][0] + 0.13, pos["C10"][1] - 0.12)
+    # --- Catena isoottile da C17 (zigzag verso v decrescente) ---
+    cx, cz = pos["C17"]
+    for j, name in enumerate(("C20", "C22", "C23", "C24", "C25", "C26", "C27")):
+        cx = cx + (0.05 if j % 2 == 0 else -0.05)
+        cz = cz - 0.148
+        pos[name] = (cx, cz)
+    pos["C21"] = (pos["C20"][0] + 0.12, pos["C20"][1] + 0.05)
+    # --- OH sul C3 (verso v positivo = acqua) ---
+    pos["O3"] = (pos["C3"][0] + 0.1, pos["C3"][1] + 0.11)
+    pos["H3'"] = (pos["O3"][0] + 0.08, pos["O3"][1] + 0.08)
+    return pos
+
+
+STEROL_RESIDUES = {"CHL1"}  # rtp_name con geometria steran dedicata
+
+
+def _sterol_atom_lines(
+    rtp_name: str,
+    atoms_info: list[tuple[str, str, float, int]],
+    bonds: list[tuple[str, str]],
+    resno: int,
+    x: float,
+    y: float,
+    z_head: float,
+    chain_id: str = "A",
+) -> list[str]:
+    """Righe PDB per uno sterolo (CHL1): backbone steran 4 anelli + catena.
+
+    Il piano degli anelli è verticale (perpendicolare alla superficie? no:
+    parallelo alla normale della membrana), OH verso l'acqua, catena verso il
+    centro del bilayer.
+    """
+    off = _sterane_offsets()
+    z0 = z_head - 0.6 if z_head > 0 else -(z_head - 0.6)
+    flip = 1.0 if z_head > 0 else -1.0
+
+    coords: dict[str, tuple[float, float, float]] = {}
+    for name, _atype, _charge, _group in atoms_info:
+        if name in off:
+            u, v = off[name]
+            coords[name] = (x + u, y, z0 + flip * v)
+
+    # idrogeni: vicino al partner di legame (dal grafo dei bonds rtp)
+    bond_map: dict[str, list[str]] = {}
+    for a, b in bonds:
+        bond_map.setdefault(a, []).append(b)
+        bond_map.setdefault(b, []).append(a)
+
+    h_idx = 0
+    for name, _atype, _charge, _group in atoms_info:
+        if name in coords:
+            continue
+        parents = [p for p in bond_map.get(name, []) if p in coords]
+        if parents:
+            px, py, pz = coords[parents[0]]
+            ang = h_idx * 2.399  # golden-angle: offset distribuiti
+            h_idx += 1
+            coords[name] = (
+                px + 0.1 * math.cos(ang),
+                py + 0.1 * math.sin(ang),
+                pz + 0.03 * (1 if h_idx % 2 else -1),
+            )
+        else:
+            coords[name] = (x + 0.05, y + 0.05, z0)
+
+    lines: list[str] = []
+    for name, _atype, _charge, _group in atoms_info:
+        ox, oy, oz = coords[name]
+        elem = name[0]
+        lines.append(
+            f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
+            f"{chain_id:1s}{resno:4d}    {ox*10:8.3f}{oy*10:8.3f}{oz*10:8.3f}  "
+            f"1.00  0.00          {elem:>2s}"
+        )
+    return lines
+
+
 def _lipid_atom_lines(
     resname: str,
     resno: int,
@@ -235,12 +392,19 @@ def _lipid_atom_lines(
             atom_name = f"C{i+1}" if i > 0 else "C1"
             lines.append(
                 f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
-                f"{chain_id:1s}{resno:4d}    {x:8.3f}{y:8.3f}{z_head:8.3f}  "
+                f"{chain_id:1s}{resno:4d}    {x*10:8.3f}{y*10:8.3f}{z_head*10:8.3f}  "
                 f"1.00  0.00          C"
             )
         return lines
 
     atoms_info = residue["atoms"]  # lista di (name, type, charge, group)
+
+    # steroli: backbone steran dedicato (anelli fused, non catene)
+    if rtp_name in STEROL_RESIDUES:
+        return _sterol_atom_lines(
+            rtp_name, atoms_info, residue.get("bonds", []),
+            resno, x, y, z_head, chain_id,
+        )
 
     # Costanti geometriche (nm)
     BOND_CC = 0.154
@@ -368,7 +532,7 @@ def _lipid_atom_lines(
         elem = name[0]  # primo carattere come elemento (approssimativo)
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
-            f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
+            f"{chain_id:1s}{resno:4d}    {ox*10:8.3f}{oy*10:8.3f}{oz*10:8.3f}  "
             f"1.00  0.00          {elem:>2s}"
         )
 
@@ -404,9 +568,12 @@ def generate_pdb(
     if total_lipids == 0:
         raise ValueError("nessun lipide specificato (upper e lower vuoti)")
 
-    area_per_lipid = math.pi * (LIPID_RADIUS ** 2)
-    total_area = total_lipids * area_per_lipid * 1.3
-    sheet_radius = math.sqrt(total_area / math.pi)
+    # area totale PER FOGLIETTO con APL reali per composizione (densità fisica)
+    def _sheet_area(d: dict[str, int]) -> float:
+        return sum(c * apl_for(n) for n, c in d.items())
+    area_upper = _sheet_area(upper)
+    area_lower = _sheet_area(lower)
+    sheet_radius = math.sqrt(max(area_upper, area_lower) / math.pi) * 1.15
 
     # scegli generatore posizioni
     if layout == "fluid":
@@ -468,6 +635,44 @@ def generate_pdb(
     return "\n".join(lines) + "\n"
 
 
+def net_charge(upper: dict[str, int], lower: dict[str, int]) -> float:
+    """Carica totale del bilayer (e) sommando le cariche rtp delle specie."""
+    total = 0.0
+    for side in (upper, lower):
+        for name, count in side.items():
+            rtp_name = LIPID_NAME_MAP.get(name, name)
+            residue = LIPID_RTP_DATA.get(rtp_name)
+            if residue:
+                total += sum(a[2] for a in residue["atoms"]) * count
+    return round(total, 2)
+
+
+def ion_counts(
+    upper: dict[str, int],
+    lower: dict[str, int],
+    box_x: float = 12.0,
+    box_y: float = 12.0,
+    box_z: float = 12.0,
+    ion_conc: float = 0.15,
+) -> tuple[int, int, float]:
+    """Numero ioni (+, -) per neutralizzare e raggiungere la concentrazione.
+
+    Ritorna (n_cation, n_anion, net_charge_e): ioni di compensazione della
+    carica dei lipidi + coppie da concentrazione.
+    """
+    net = net_charge(upper, lower)
+    vol_nm3 = box_x * box_y * box_z
+    # 0.6022 ioni per (M * nm^3)
+    n_pairs = max(1, round(ion_conc * vol_nm3 * 0.6022))
+    extra = int(round(abs(net)))
+    if net < 0:
+        # lipidi negativi → cationi in più
+        return n_pairs + extra, n_pairs, net
+    if net > 0:
+        return n_pairs, n_pairs + extra, net
+    return n_pairs, n_pairs, net
+
+
 def generate_top(
     upper: dict[str, int],
     lower: dict[str, int],
@@ -507,6 +712,9 @@ def generate_top(
 
     all_lipids = set(upper) | set(lower)
 
+    # atomi di testa su cui mettere i restraints (POSRES)
+    POSRES_ATOMS = {"P", "N", "N3", "O3", "O1", "O2", "OG1"}
+
     for name in sorted(all_lipids):
         rtp_name = LIPID_NAME_MAP.get(name, name)
         residue = LIPID_RTP_DATA.get(rtp_name)
@@ -535,6 +743,20 @@ def generate_top(
                 f"{name:>4s}  {group:>4d}   {charge:>6.3f}   {mass:>7.3f}"
             )
         lines.append("")
+
+        # restraints di posizione sugli atomi polari (equilibratura, -DPOSRES)
+        posres_idx = [
+            i + 1 for i, (aname, *_rest) in enumerate(atoms_info)
+            if aname in POSRES_ATOMS
+        ]
+        if posres_idx:
+            lines.append("#ifdef POSRES")
+            lines.append("[ position_restraints ]")
+            lines.append("; atom  type      fx        fy        fz")
+            for idx in posres_idx:
+                lines.append(f"{idx:5d}     1      1000      1000      1000")
+            lines.append("#endif")
+            lines.append("")
 
     lines.append("[ system ]")
     lines.append("; Name")
@@ -577,8 +799,6 @@ coulombtype       = PME
 rcoulomb          = 1.2
 rvdw              = 1.2
 pbc               = xyz
-
-ref-t             = 300
 
 ; Dimensioni scatola (nm) - usate da gmx editconf
 ; box_x = {box_x:.2f}, box_y = {box_y:.2f}, box_z = {box_z:.2f}
@@ -663,7 +883,7 @@ def _extract_charmm36_ff(system_dir: Path) -> None:
     """Estrae i file CHARMM36 dal tarball in /tmp/charmm36.tgz nella directory system
     del job, così che gmx grompp possa trovare forcefield.itp ecc."""
 
-    tar_path = Path("/tmp/charmm36.tgz")
+    tar_path = Path.home() / ".local" / "share" / "cgui-studio" / "charmm36.tgz"
     target_dir = system_dir / "charmm36.ff"
 
     if target_dir.exists():
@@ -671,7 +891,7 @@ def _extract_charmm36_ff(system_dir: Path) -> None:
 
     if not tar_path.exists():
         print(
-            "AVVISO: /tmp/charmm36.tgz non trovato. "
+            "AVVISO: charmm36.tgz non trovato in ~/.local/share/cgui-studio/ "
             "gmx grompp potrebbe fallire senza i file charmm36.ff.",
             file=sys.stderr,
         )
@@ -730,6 +950,285 @@ def write_manifest(outdir: Path, files: dict[str, Path]) -> None:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+def _gmx_pipeline(
+    gmx_path: str,
+    system_dir: Path,
+    pdb_abs: str,
+    top_abs: str,
+    mdp_path: str,
+    upper: dict[str, int],
+    lower: dict[str, int],
+    box_x: float,
+    box_y: float,
+    box_z: float,
+    ion_type: str,
+    ion_conc: float,
+) -> bool:
+    """editconf → solvate → grompp → genion → grompp → mdrun.
+
+    Genion neutralizza la carica dei lipidi e porta il sale alla concentrazione
+    (flusso CHARMM-GUI). Ritorna True se la minimizzazione è completata.
+    """
+    def gmx(args_: list[str], input_text: str | None = None):
+        return run_gmx(gmx_path, args_, cwd=system_dir, input_text=input_text)
+
+    boxed_gro = str((system_dir / "boxed.gro").resolve())
+    r = gmx(["editconf", "-f", pdb_abs, "-o", boxed_gro,
+             "-box", f"{box_x}", f"{box_y}", f"{box_z}"])
+    if r.returncode != 0:
+        print(f"AVVISO: gmx editconf fallito: {r.stderr[-500:]}", file=sys.stderr)
+        return False
+    print("gmx editconf: OK")
+
+    solvated_gro = str((system_dir / "solvated.gro").resolve())
+    r = gmx(["solvate", "-cp", boxed_gro, "-cs", "spc216.gro",
+             "-o", solvated_gro, "-p", top_abs])
+    if r.returncode != 0:
+        print(f"AVVISO: gmx solvate fallito: {r.stderr[-500:]}", file=sys.stderr)
+        return False
+    print("gmx solvate: OK")
+
+    # --- Ioni: grompp preliminare → genion (neutralizza + conc) ---
+    tpr_ion = str((system_dir / "ion.tpr").resolve())
+    r = gmx(["grompp", "-maxwarn", "10", "-f", mdp_path, "-c", solvated_gro,
+             "-p", top_abs, "-o", tpr_ion])
+    if r.returncode != 0:
+        print(f"AVVISO: gmx grompp (pre-ioni) fallito: {r.stderr[-500:]}", file=sys.stderr)
+        return False
+
+    n_cat, n_an, net = ion_counts(upper, lower, box_x, box_y, box_z, ion_conc)
+    pname = "K" if ion_type == "KCl" else "NA"
+    ionized_gro = str((system_dir / "ionized.gro").resolve())
+    # genion chiede il gruppo solvente in modo interattivo: "SOL\n" via stdin
+    r = gmx(["genion", "-s", tpr_ion, "-p", top_abs, "-o", ionized_gro,
+             "-np", str(n_cat), "-nn", str(n_an),
+             "-pname", pname, "-nname", "CL"],
+            input_text="SOL\n")
+    if r.returncode != 0:
+        print(f"AVVISO: gmx genion fallito: {r.stderr[-500:]}", file=sys.stderr)
+        return False
+    print(f"gmx genion: OK ({n_cat} {pname}+, {n_an} CL-, carica lipidi {net:+g} e)")
+
+    minim_tpr = str((system_dir / "minim.tpr").resolve())
+    r = gmx(["grompp", "-f", mdp_path, "-c", ionized_gro,
+             "-p", top_abs, "-o", minim_tpr])
+    if r.returncode != 0:
+        print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
+        return False
+    print("gmx grompp: OK - minim.tpr pronto")
+
+    r = gmx(["mdrun", "-s", minim_tpr,
+             "-o", str((system_dir / "minim.trr").resolve()),
+             "-c", str((system_dir / "minim.gro").resolve()),
+             "-e", str((system_dir / "minim.edr").resolve()),
+             "-g", str((system_dir / "minim.log").resolve())])
+    if r.returncode != 0:
+        print(f"AVVISO: gmx mdrun fallito: {r.stderr[-500:]}", file=sys.stderr)
+        return False
+    print("gmx mdrun: OK - minimizzazione completata")
+    return True
+
+
+def generate_equilib_files() -> dict[str, str]:
+    """File di equilibratura stile CHARMM-GUI: NVT → NPT (posres) → produzione.
+
+    Ritorna {nome_file: contenuto}. I posres agiscono sulle teste polari dei
+    lipidi tramite -DPOSRES (blocco nel .top). La produzione è libera.
+    """
+    common = """
+coulombtype       = PME
+rcoulomb          = 1.2
+rvdw              = 1.2
+rlist             = 1.2
+pbc               = xyz
+nstlist           = 20
+DispCorr          = EnerPres
+"""
+    nvt = f""";
+; NVT 50 ps con posres sulle teste lipidi - cgui-studio
+;
+integrator        = md
+dt                = 0.002
+nsteps            = 25000
+{common}
+tcoupl            = v-rescale
+tc-grps           = System
+tau-t             = 1.0
+ref-t             = 303
+pcoupl            = no
+gen-vel           = yes
+gen-temp          = 303
+gen-seed          = 173529
+define            = -DPOSRES
+
+nstxout           = 5000
+nstlog            = 500
+nstenergy         = 500
+"""
+    npt = f""";
+; NPT 50 ps semiisotropo con posres - cgui-studio
+;
+integrator        = md
+dt                = 0.002
+nsteps            = 25000
+{common}
+tcoupl            = v-rescale
+tc-grps           = System
+tau-t             = 1.0
+ref-t             = 303
+pcoupl            = c-rescale
+pcoupltype        = semiisotropic
+tau-p             = 5.0
+ref-p             = 1.0 1.0
+compressibility   = 4.5e-5 4.5e-5
+define            = -DPOSRES
+
+nstxout           = 5000
+nstlog            = 500
+nstenergy         = 500
+"""
+    prod = f""";
+; Produzione 100 ns libera - cgui-studio
+;
+integrator        = md
+dt                = 0.002
+nsteps            = 50000000
+{common}
+tcoupl            = v-rescale
+tc-grps           = System
+tau-t             = 1.0
+ref-t             = 303
+pcoupl            = c-rescale
+pcoupltype        = semiisotropic
+tau-p             = 5.0
+ref-p             = 1.0 1.0
+compressibility   = 4.5e-5 4.5e-5
+
+nstxout-compressed = 5000
+compressed-x-precision = 1000
+nstlog            = 1000
+nstenergy         = 1000
+"""
+    sh = """#!/bin/bash
+# Equilibratura + produzione - cgui-studio (stile CHARMM-GUI)
+# Uso: bash equil.sh  (richiede minim.gro completato)
+set -e
+cd "$(dirname "$0")"
+echo "=== NVT 50 ps (posres) ==="
+gmx grompp -f equilib_nvt.mdp -c minim.gro -r minim.gro -p topol.top -o nvt.tpr
+gmx mdrun -s nvt.tpr -o nvt.trr -c nvt.gro -e nvt.edr -g nvt.log
+echo "=== NPT 50 ps semiisotropo (posres) ==="
+gmx grompp -f equilib_npt.mdp -c nvt.gro -r nvt.gro -p topol.top -o npt.tpr
+gmx mdrun -s npt.tpr -o npt.trr -c npt.gro -e npt.edr -g npt.log
+echo "=== Produzione 100 ns (libera) ==="
+gmx grompp -f production.mdp -c npt.gro -p topol.top -o md.tpr
+gmx mdrun -s md.tpr -o md.trr -c md.gro -e md.edr -g md.log
+echo "Fatto: md.gro"
+"""
+    return {
+        "equilib_nvt.mdp": nvt,
+        "equilib_npt.mdp": npt,
+        "production.mdp": prod,
+        "equil.sh": sh,
+    }
+
+
+def compute_metrics(
+    gro_path: str,
+    upper: dict[str, int],
+    lower: dict[str, int],
+) -> dict:
+    """Metriche fisiche dal .gro ionizzato (parser stdlib, niente dipendenze).
+
+    Ritorna: spessore testa-testa (P-P), APL misurata, acqua per lipide,
+    atomi totali, carica ioni. Le coordinate .gro sono in nm (native GROMACS).
+    """
+    res_counts: dict[str, int] = {}
+    z_p_upper: list[float] = []
+    z_p_lower: list[float] = []
+    n_sol = 0
+    box = (0.0, 0.0, 0.0)
+    with open(gro_path) as f:
+        lines = f.readlines()
+        natoms = int(lines[1].strip())
+        idx = 2
+        for _ in range(natoms):
+            if idx >= len(lines):
+                break
+            line = lines[idx]
+            idx += 1
+            if len(line) < 44:
+                continue
+            resname = line[5:10].strip()
+            atomname = line[10:15].strip()
+            try:
+                z = float(line[36:44])
+            except ValueError:
+                continue
+            res_counts[resname] = res_counts.get(resname, 0) + 1
+            if resname == "SOL" and atomname == "OW":
+                n_sol += 1
+            if atomname == "P":
+                (z_p_upper if z > 0 else z_p_lower).append(z)
+        for line in lines[idx:]:
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    box = tuple(float(v) for v in parts[:3])
+                    break
+                except ValueError:
+                    continue
+    thickness = 0.0
+    if z_p_upper and z_p_lower:
+        thickness = (
+            sum(z_p_upper) / len(z_p_upper) - sum(z_p_lower) / len(z_p_lower)
+        )
+    n_lip_upper = sum(upper.values()) or 1
+    n_lip_total = sum(upper.values()) + sum(lower.values()) or 1
+    apl = box[0] * box[1] / n_lip_upper
+    return {
+        "natoms": natoms,
+        "box_nm": [round(v, 3) for v in box],
+        "thickness_P_nm": round(thickness, 3),
+        "n_phosphate_upper": len(z_p_upper),
+        "n_phosphate_lower": len(z_p_lower),
+        "apl_measured_nm2": round(apl, 3),
+        "apl_expected_nm2": round(
+            sum(c * apl_for(n) for n, c in upper.items()) / n_lip_upper, 3
+        ),
+        "water_per_lipid": round(n_sol / n_lip_total, 1),
+        "net_lipid_charge_e": net_charge(upper, lower),
+    }
+
+
+# Preset membrane (composizione per ciascun foglietto, ~64 lipidi/foglio).
+# Fonti: Ingólfsson et al. 2014 (plasma mammaliana), van Meer et al. 2008.
+MEMBRANE_PRESETS: dict[str, dict] = {
+    "plasma": {
+        "label": "Membrana plasmatica mammaliana (CHOL 35%)",
+        "upper": {"POPC": 14, "POPE": 6, "PSM": 8, "CHOL": 20,
+                  "POPS": 4, "POPI": 2, "DOPS": 2},
+        "lower": {"POPC": 14, "POPE": 6, "PSM": 8, "CHOL": 20,
+                  "POPS": 4, "POPI": 2, "DOPS": 2},
+    },
+    "er": {
+        "label": "Reticolo endoplasmatico (CHOL 5%, PE alto)",
+        "upper": {"POPC": 22, "POPE": 18, "CHOL": 3, "POPI": 6, "POPS": 3},
+        "lower": {"POPC": 22, "POPE": 18, "CHOL": 3, "POPI": 6, "POPS": 3},
+    },
+    "mito": {
+        "label": "Mitochondriale interna (cardiolipina TOCL)",
+        "upper": {"POPC": 18, "POPE": 24, "TOCL1": 4, "POPI": 3, "POPA": 3},
+        "lower": {"POPC": 18, "POPE": 24, "TOCL1": 4, "POPI": 3, "POPA": 3},
+    },
+    "popc": {
+        "label": "POPC puro (controllo)",
+        "upper": {"POPC": 64},
+        "lower": {"POPC": 64},
+    },
+}
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -840,6 +1339,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["lipid", "protein", "dna", "rna", "small-mol"],
         help="Tipo di sistema da costruire (default: lipid)",
     )
+    parser.add_argument(
+        "--preset", type=str, default=None,
+        choices=sorted(MEMBRANE_PRESETS),
+        help="Composizione membrana predefinita (ignora --spec/--upper/--lower)",
+    )
     return parser
 
 
@@ -858,6 +1362,12 @@ def main(argv: list[str] | None = None) -> int:
     upper = parse_spec(args.upper) if args.upper else {}
     lower = parse_spec(args.lower) if args.lower else {}
     spec = parse_spec(args.spec) if args.spec else {}
+
+    if args.preset:
+        preset = MEMBRANE_PRESETS[args.preset]
+        upper = dict(preset["upper"])
+        lower = dict(preset["lower"])
+        print(f"Preset: {preset['label']}")
 
     if not upper and not lower:
         if spec:
@@ -946,70 +1456,33 @@ File:
             gmx_run = True
             pdb_abs = str(pdb_path.resolve())
             top_abs = str(top_path.resolve())
-            boxed_gro = str((system_dir / "boxed.gro").resolve())
-            r = run_gmx(
-                gmx_path,
-                ["editconf", "-f", pdb_abs, "-o", boxed_gro,
-                 "-box", f"{args.box_x}", f"{args.box_y}", f"{args.box_z}"],
-                cwd=system_dir,
+            gmx_run = _gmx_pipeline(
+                gmx_path, system_dir, pdb_abs, top_abs, str(mdp_path.resolve()),
+                upper, lower, args.box_x, args.box_y, args.box_z,
+                args.ion_type, args.ion_conc,
             )
-            if r.returncode != 0:
-                print(f"AVVISO: gmx editconf fallito: {r.stderr[-500:]}", file=sys.stderr)
-            else:
-                print("gmx editconf: OK")
-                gro_in = system_dir / "boxed.gro"
-                if gro_in.exists():
-                    solvated_gro = str((system_dir / "solvated.gro").resolve())
-                    r = run_gmx(
-                        gmx_path,
-                        ["solvate", "-cp", str(gro_in.resolve()), "-cs", "spc216.gro",
-                         "-o", solvated_gro, "-p", top_abs],
-                        cwd=system_dir,
-                    )
-                    if r.returncode != 0:
-                        print(f"AVVISO: gmx solvate fallito: {r.stderr[-500:]}", file=sys.stderr)
-                    else:
-                        print("gmx solvate: OK")
-                        # Esegue gmx grompp usando il sistema solvato come input
-                        solvated_gro_path = system_dir / "solvated.gro"
-                        minim_tpr = system_dir / "minim.tpr"
-                        r = run_gmx(
-                            gmx_path,
-                            [
-                                "grompp", "-f", str(mdp_path.resolve()),
-                                "-c", str(solvated_gro_path.resolve()),
-                                "-p", top_abs,
-                                "-o", str(minim_tpr.resolve()),
-                            ],
-                            cwd=system_dir,
-                        )
-                        if r.returncode != 0:
-                            print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
-                        else:
-                            print("gmx grompp: OK - minim.tpr pronto")
-                            # Esegue gmx mdrun per minimizzazione
-                            minim_trr = system_dir / "minim.trr"
-                            minim_gro = system_dir / "minim.gro"
-                            minim_edr = system_dir / "minim.edr"
-                            minim_log = system_dir / "minim.log"
-                            r = run_gmx(
-                                gmx_path,
-                                [
-                                    "mdrun", "-s", str(minim_tpr.resolve()),
-                                    "-o", str(minim_trr.resolve()),
-                                    "-c", str(minim_gro.resolve()),
-                                    "-e", str(minim_edr.resolve()),
-                                    "-g", str(minim_log.resolve()),
-                                ],
-                                cwd=system_dir,
-                            )
-                            if r.returncode != 0:
-                                warn = f"AVVISO: gmx mdrun fallito: {r.stderr[-500:]}"
-                                print(warn, file=sys.stderr)
-                            else:
-                                print("gmx mdrun: OK - minimizzazione completata")
         else:
             print("AVVISO: --run-gmx richiesto ma gmx non trovato nel PATH.", file=sys.stderr)
+
+    # --- File di equilibratura (NVT/NPT/produzione + script) ---
+    equilib = generate_equilib_files()
+    for fname, content in equilib.items():
+        (outdir / fname).write_text(content)
+
+    # --- Metriche fisiche dopo la build gmx ---
+    metrics = None
+    ionized = system_dir / "ionized.gro"
+    if ionized.exists():
+        try:
+            metrics = compute_metrics(str(ionized), upper, lower)
+            (outdir / "metrics.json").write_text(
+                json.dumps(metrics, indent=2, ensure_ascii=False) + "\n"
+            )
+            print(f"  Metriche: spessore P-P {metrics['thickness_P_nm']} nm, "
+                  f"APL {metrics['apl_measured_nm2']} nm2, "
+                  f"acqua/lipide {metrics['water_per_lipid']}")
+        except Exception as exc:
+            print(f"AVVISO: metriche non calcolate: {exc}", file=sys.stderr)
 
     # --- Manifest ---
     files = {
