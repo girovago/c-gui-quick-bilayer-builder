@@ -359,7 +359,7 @@ def _sterol_atom_lines(
         elem = name[0]
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
-            f"{chain_id:1s}{resno:4d}    {ox*10:8.3f}{oy*10:8.3f}{oz*10:8.3f}  "
+            f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
             f"1.00  0.00          {elem:>2s}"
         )
     return lines
@@ -392,7 +392,7 @@ def _lipid_atom_lines(
             atom_name = f"C{i+1}" if i > 0 else "C1"
             lines.append(
                 f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
-                f"{chain_id:1s}{resno:4d}    {x*10:8.3f}{y*10:8.3f}{z_head*10:8.3f}  "
+                f"{chain_id:1s}{resno:4d}    {x:8.3f}{y:8.3f}{z_head:8.3f}  "
                 f"1.00  0.00          C"
             )
         return lines
@@ -532,7 +532,7 @@ def _lipid_atom_lines(
         elem = name[0]  # primo carattere come elemento (approssimativo)
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
-            f"{chain_id:1s}{resno:4d}    {ox*10:8.3f}{oy*10:8.3f}{oz*10:8.3f}  "
+            f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
             f"1.00  0.00          {elem:>2s}"
         )
 
