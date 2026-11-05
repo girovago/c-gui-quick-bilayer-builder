@@ -1,163 +1,42 @@
 <script>
-  // Wizard di composizione in 4 passi.
-  // Scienza: la composizione nei due foglietti è sempre MESCOLATA a caso
-  // (soluzione laterale 2D) — non è un'opzione estetica; per questo non
-  // esiste una scelta "griglia/mosaico" nella UI.
   import { LIPID_CATALOG, LIPID_CATEGORIES } from "./lipidCatalog.js";
 
   const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy } = $props();
 
-  const SUPPORTED_LOCAL = new Set([
-    "POPC", "CHOL", "POPE", "DPPC", "DSPC", "DOPS", "DOTAP", "SM",
-  ]);
+  const COMMON = new Set(["POPC","CHOL","POPE","DPPC","DSPC","DOPS","DOTAP","SM","DOPC","DOPE","DMPC","DLPC","DPPS","POPS","POPA","POPG","POPI"]);
+  const TYPE_COLORS = { lipid: "#3b82f6", protein: "#ef4444", dna: "#10b981", rna: "#8b5cf6", "small-mol": "#f59e0b" };
 
-  // lipidi comuni mostrati quando non c'è ricerca/filtro
-  const COMMON = new Set([
-    "POPC", "CHOL", "POPE", "DPPC", "DSPC", "DOPS", "DOTAP", "SM",
-    "DOPC", "DOPE", "DMPC", "DLPC", "DPPS", "POPS", "POPA", "POPG", "POPI",
-  ]);
-
-  const CAT_COLORS = {
-    PC: "#3b82f6", PE: "#10b981", PS: "#ec4899", PA: "#f59e0b",
-    PG: "#8b5cf6", "PI / Fosfoinositidi": "#06b6d4", Cardiolipine: "#dc2626",
-    Steroli: "#ef4444", Sfingolipidi: "#14b8a6", Ceramidi: "#a855f7",
-    "Acidi grassi": "#84cc16", Detergenti: "#78716c", Altri: "#a1a1aa",
-  };
-
+  const CAT_COLORS = { PC: "#3b82f6", PE: "#10b981", PS: "#ec4899", PA: "#f59e0b", PG: "#8b5cf6", "PI / Fosfoinositidi": "#06b6d4", Cardiolipine: "#dc2626", Steroli: "#ef4444", Sfingolipidi: "#14b8a6", Ceramidi: "#a855f7", "Acidi grassi": "#84cc16", Detergenti: "#78716c", Altri: "#a1a1aa" };
   const STEPS = ["Tipo", "Composizione", "Ambiente", "Riepilogo"];
 
-  // --- stato wizard ---
-  let step = $state(1);
-  let maxVisited = $state(1);
-  let buildType = $state("lipid");
+  let step = $state(1), maxVisited = $state(1), buildType = $state("lipid");
+  let symmetric = $state(true), upperCounts = $state({}), lowerCounts = $state({}), activeSide = $state("upper");
+  let search = $state(""), catFilter = $state("");
+  let proteinPdbId = $state(""), proteinPdbFile = null, dnaSequence = $state(""), rnaSequence = $state(""), smallMolFile = null;
+  let boxX = $state(12), boxY = $state(12), boxZ = $state(12), centerStructure = $state(true), solvent = $state("water"), ions = $state("KCl");
 
-  // --- composizione lipidi ---
-  let symmetric = $state(true);
-  let upperCounts = $state({});
-  let lowerCounts = $state({});
-  let activeSide = $state("upper"); // tab quando asimmetrico
-  let search = $state("");
-  let catFilter = $state("");
+  const PRESETS = { plasma: { label: "Plasma (CHOL 35%)", upper: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 }, lower: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 } }, er: { label: "ER (PE alto)", upper: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 }, lower: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 } }, mito: { label: "Mitocondri (TOCL)", upper: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 }, lower: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 } }, popc: { label: "POPC puro", upper: { POPC: 64 }, lower: { POPC: 64 } } };
+  const chargeColor = $derived(buildMetrics ? (buildMetrics.net_lipid_charge_e !== 0 ? "text-red-600" : "text-zinc-600") : "text-zinc-600");
 
-  // --- altri tipi ---
-  let proteinPdbId = $state("");
-  let proteinPdbFile = null;
-  let dnaSequence = $state("");
-  let rnaSequence = $state("");
-  let smallMolFile = null;
-
-  // --- ambiente ---
-  let boxX = $state(12);
-  let boxY = $state(12);
-  let boxZ = $state(12);
-  let centerStructure = $state(true);
-  let solvent = $state("water");
-  let ions = $state("KCl");
-
-  const PRESETS = {
-    plasma: { label: "Plasma mammaliana (CHOL 35%)", upper: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 }, lower: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 } },
-    er:     { label: "Reticolo endoplasmatico (PE alto)", upper: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 }, lower: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 } },
-    mito:   { label: "Mitochondriale interna (cardiolipina)", upper: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 }, lower: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 } },
-    popc:   { label: "POPC puro (controllo)", upper: { POPC: 64 }, lower: { POPC: 64 } },
-  };
-
-  const chargeColor = $derived(
-    buildMetrics
-      ? buildMetrics.net_lipid_charge_e !== 0
-        ? "text-red-600"
-        : "text-zinc-600"
-      : "text-zinc-600"
-  );
-
-  
-  function applyPreset(key) {
-    const p = PRESETS[key];
-    if (!p) return;
-    symmetric = true;
-    upperCounts = { ...p.upper };
-    lowerCounts = { ...p.lower };
-  }
-
-  function goto(n) {
-    if (n <= maxVisited) step = n;
-  }
-  function next() {
-    if (stepValid()) {
-      step = Math.min(step + 1, 4);
-      maxVisited = Math.max(maxVisited, step);
-    }
-  }
-  function back() {
-    step = Math.max(step - 1, 1);
-  }
-
-  // --- composizione: contatori per lato attivo ---
-  function counts() {
-    return symmetric || activeSide === "upper" ? upperCounts : lowerCounts;
-  }
-  function setCounts(next) {
-    if (symmetric || activeSide === "upper") upperCounts = next;
-    else lowerCounts = next;
-  }
-  function countOf(id) {
-    return counts()[id] || 0;
-  }
-  function add(id) {
-    setCounts({ ...counts(), [id]: countOf(id) + 1 });
-  }
-  function sub(id) {
-    const c = countOf(id);
-    if (c > 0) {
-      const n = { ...counts() };
-      if (c === 1) delete n[id];
-      else n[id] = c - 1;
-      setCounts(n);
-    }
-  }
-  function selectedList() {
-    const entries = Object.entries(upperCounts).filter(([, v]) => v > 0);
-    if (symmetric) return entries;
-    const lower = Object.entries(lowerCounts).filter(([, v]) => v > 0);
-    return entries; // la vista selezionati mostra upper; lower visibile in riepilogo
-  }
-  function totalCounts(c) {
-    return Object.values(c).reduce((s, v) => s + v, 0);
-  }
-
-  function specString(c) {
-    const parts = Object.entries(c)
-      .filter(([, v]) => v > 0)
-      .map(([k, v]) => `${k}=${v}`);
-    return parts.join(";");
-  }
-
-  // --- catalogo filtrato ---
-  function filtered() {
-    const q = search.trim().toUpperCase();
-    let list = LIPID_CATALOG;
-    if (catFilter) list = list.filter((l) => l.cat === catFilter);
-    if (q) list = list.filter((l) => l.id.includes(q));
-    else if (!catFilter) list = list.filter((l) => COMMON.has(l.id));
-    return list.slice(0, 90);
-  }
-  function filteredTotal() {
-    const q = search.trim().toUpperCase();
-    let list = LIPID_CATALOG;
-    if (catFilter) list = list.filter((l) => l.cat === catFilter);
-    if (q) list = list.filter((l) => l.id.includes(q));
-    else if (!catFilter) list = list.filter((l) => COMMON.has(l.id));
-    return list.length;
-  }
+  function applyPreset(k) { const p = PRESETS[k]; if (!p) return; symmetric = true; upperCounts = { ...p.upper }; lowerCounts = { ...p.lower }; }
+  function goto(n) { if (n <= maxVisited) step = n; }
+  function next() { if (stepValid()) { step = Math.min(step + 1, 4); maxVisited = Math.max(maxVisited, step); } }
+  function back() { step = Math.max(step - 1, 1); }
+  function counts() { return symmetric || activeSide === "upper" ? upperCounts : lowerCounts; }
+  function setCounts(n) { if (symmetric || activeSide === "upper") upperCounts = n; else lowerCounts = n; }
+  function countOf(id) { return counts()[id] || 0; }
+  function add(id) { setCounts({ ...counts(), [id]: countOf(id) + 1 }); }
+  function sub(id) { const c = countOf(id); if (c > 0) { const n = { ...counts() }; if (c === 1) delete n[id]; else n[id] = c - 1; setCounts(n); } }
+  function selectedList() { return Object.entries(upperCounts).filter(([, v]) => v > 0); }
+  function totalCounts(c) { return Object.values(c).reduce((s, v) => s + v, 0); }
+  function specString(c) { return Object.entries(c).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(";"); }
+  function filtered() { const q = search.trim().toUpperCase(); let list = LIPID_CATALOG; if (catFilter) list = list.filter(l => l.cat === catFilter); if (q) list = list.filter(l => l.id.includes(q)); else if (!catFilter) list = list.filter(l => COMMON.has(l.id)); return list.slice(0, 90); }
+  function filteredTotal() { const q = search.trim().toUpperCase(); let list = LIPID_CATALOG; if (catFilter) list = list.filter(l => l.cat === catFilter); if (q) list = list.filter(l => l.id.includes(q)); else if (!catFilter) list = list.filter(l => COMMON.has(l.id)); return list.length; }
   const hasSearchOrFilter = $derived(!!search.trim() || !!catFilter);
 
-  // --- validazione per passo ---
   function stepValid() {
     if (step === 2) {
-      if (buildType === "lipid") {
-        if (totalCounts(upperCounts) === 0) return false;
-        if (!symmetric && totalCounts(lowerCounts) === 0) return false;
-        return true;
-      }
+      if (buildType === "lipid") { if (totalCounts(upperCounts) === 0) return false; if (!symmetric && totalCounts(lowerCounts) === 0) return false; return true; }
       if (buildType === "protein") return proteinPdbId.trim().length === 4 || !!proteinPdbFile;
       if (buildType === "dna") return dnaSequence.trim().length > 0;
       if (buildType === "rna") return rnaSequence.trim().length > 0;
@@ -165,416 +44,129 @@
     }
     return true;
   }
-
-  // --- azioni finali ---
-  function params() {
-    return {
-      boxX, boxY, boxZ, centerStructure, layout: "fluid", solvent, ions,
-      buildType,
-      upper: specString(upperCounts) || null,
-      lower: symmetric ? specString(upperCounts) : specString(lowerCounts),
-      proteinPdbId, proteinPdbFileName: proteinPdbFile?.name || null,
-      dnaSequence, rnaSequence,
-      smallMolFileName: smallMolFile?.name || null,
-    };
-  }
-
-  function saveJson() {
-    const data = {
-      buildType,
-      upper: upperCounts,
-      lower: symmetric ? upperCounts : lowerCounts,
-      symmetric,
-      boxX, boxY, boxZ, centerStructure, solvent, ions,
-      proteinPdbId, dnaSequence, rnaSequence,
-      created: new Date().toISOString(),
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `cgui_composizione_${new Date().toISOString().slice(0, 16)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function loadJson(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const d = JSON.parse(String(ev.target.result));
-        buildType = d.buildType ?? buildType;
-        upperCounts = d.upper ?? {};
-        lowerCounts = d.lower ?? {};
-        symmetric = d.symmetric ?? true;
-        boxX = d.boxX ?? boxX;
-        boxY = d.boxY ?? boxY;
-        boxZ = d.boxZ ?? boxZ;
-        centerStructure = d.centerStructure ?? centerStructure;
-        solvent = d.solvent ?? solvent;
-        ions = d.ions ?? ions;
-        proteinPdbId = d.proteinPdbId ?? "";
-        dnaSequence = d.dnaSequence ?? "";
-        rnaSequence = d.rnaSequence ?? "";
-        step = 4;
-        maxVisited = 4;
-      } catch {
-        window.alert("JSON non valido");
-      }
-    };
-    reader.readAsText(file);
-  }
-
-  function create() {
-    if (!stepValid()) return;
-    const p = params();
-    if (onCreate) onCreate(p.upper || "POPC=64", p);
-  }
-  function submit() {
-    if (!stepValid()) return;
-    const p = params();
-    if (onSubmit) onSubmit(p.upper || "POPC=64", p);
-  }
-
-  function summary() {
-    if (buildType !== "lipid") return "";
-    const u = specString(upperCounts) || "—";
-    const l = symmetric ? u : specString(lowerCounts) || "—";
-    return `Foglio superiore: ${u}\nFoglio inferiore: ${l}`;
-  }
+  function params() { return { boxX, boxY, boxZ, centerStructure, layout: "fluid", solvent, ions, buildType, upper: specString(upperCounts) || null, lower: symmetric ? specString(upperCounts) : specString(lowerCounts), proteinPdbId, proteinPdbFileName: proteinPdbFile?.name || null, dnaSequence, rnaSequence, smallMolFileName: smallMolFile?.name || null }; }
+  function saveJson() { const d = { buildType, upper: upperCounts, lower: symmetric ? upperCounts : lowerCounts, symmetric, boxX, boxY, boxZ, centerStructure, solvent, ions, proteinPdbId, dnaSequence, rnaSequence, created: new Date().toISOString() }; const b = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" }); const u = URL.createObjectURL(b); const a = document.createElement("a"); a.href = u; a.download = `cgui_composizione_${new Date().toISOString().slice(0,16)}.json`; a.click(); URL.revokeObjectURL(u); }
+  function loadJson(e) { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = (ev) => { try { const d = JSON.parse(String(ev.target.result)); buildType = d.buildType ?? buildType; upperCounts = d.upper ?? {}; lowerCounts = d.lower ?? {}; symmetric = d.symmetric ?? true; boxX = d.boxX ?? boxX; boxY = d.boxY ?? boxY; boxZ = d.boxZ ?? boxZ; centerStructure = d.centerStructure ?? centerStructure; solvent = d.solvent ?? solvent; ions = d.ions ?? ions; proteinPdbId = d.proteinPdbId ?? ""; dnaSequence = d.dnaSequence ?? ""; rnaSequence = d.rnaSequence ?? ""; step = 4; maxVisited = 4; } catch { window.alert("JSON non valido"); } }; r.readAsText(f); }
+  function create() { if (!stepValid()) return; const p = params(); if (buildType === "lipid") { if (onCreate) onCreate(p.upper || "POPC=64", p); } else { if (onSubmit) onSubmit(p.upper || "POPC=64", p); } }
+  function submit() { if (!stepValid()) return; const p = params(); if (onSubmit) onSubmit(p.upper || "POPC=64", p); }
 </script>
-
 <div class="flex flex-col gap-4">
   <!-- Stepper -->
-  <div class="flex items-center gap-1 rounded-xl border border-zinc-200 bg-white p-2">
+  <div class="flex items-center gap-1 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
     {#each STEPS as label, i}
-      {#if i > 0}
-        <div class="h-px flex-1 bg-zinc-200"></div>
-      {/if}
-      <button
-        type="button"
-        class="flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors {step === i + 1
-          ? 'bg-cyan-50 text-cyan-700 ring-1 ring-cyan-300'
-          : i + 1 <= maxVisited
-            ? 'text-zinc-700 hover:bg-zinc-50'
-            : 'text-zinc-300'}"
-        onclick={() => goto(i + 1)}
-        aria-current={step === i + 1 ? "step" : undefined}
-      >
-        <span class="flex h-5 w-5 items-center justify-center rounded-full text-[10px] {step === i + 1 ? 'bg-cyan-500 text-white' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span>
-        {label}
+      {#if i > 0}<div class="h-px flex-1 bg-zinc-200"></div>{/if}
+      <button type="button" class="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-300 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
+        <span class="flex h-6 w-6 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="font-medium">{label}</span>
       </button>
     {/each}
   </div>
-
-  <!-- STEP 1: tipo sistema -->
+  <!-- STEP 1 -->
   {#if step === 1}
-    <div class="rounded-xl border border-zinc-200 bg-white p-4">
-      <div class="grid grid-cols-3 gap-3">
-        {#each [
-          { id: "lipid", icon: "🫧", title: "Bilayer lipidico", sub: "Composizione due foglietti" },
-          { id: "protein", icon: "🧬", title: "Proteina", sub: "PDB ID o file" },
-          { id: "dna", icon: "🧵", title: "DNA", sub: "Sequenza nucleotidi" },
-          { id: "rna", icon: "🧵", title: "RNA", sub: "Sequenza nucleotidi" },
-          { id: "small-mol", icon: "💊", title: "Small molecule", sub: "PDB / SDF" },
-        ] as t}
-          <button
-            type="button"
-            class="flex flex-col items-start rounded-xl border p-4 text-left transition-all {buildType === t.id
-              ? 'border-cyan-500 bg-cyan-50/60 ring-2 ring-cyan-200'
-              : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-sm'}"
-            onclick={() => (buildType = t.id)}
-            aria-pressed={buildType === t.id}
-          >
-            <span class="text-2xl">{t.icon}</span>
-            <span class="mt-2 text-sm font-semibold text-zinc-800">{t.title}</span>
-            <span class="text-[11px] text-zinc-500">{t.sub}</span>
+    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Che tipo di sistema costruisci?</h2><p class="text-sm text-zinc-500">Scegli il tipo di struttura da generare</p></div>
+      <div class="grid grid-cols-2 gap-4">
+        {#each [{ id: "lipid", icon: "🧫", title: "Bilayer lipidico", sub: "Composizione due foglietti" }, { id: "protein", icon: "🧬", title: "Proteina", sub: "PDB ID o file" }, { id: "dna", icon: "🧬", title: "DNA", sub: "Sequenza nucleotidi" }, { id: "rna", icon: "🧬", title: "RNA", sub: "Sequenza nucleotidi" }, { id: "small-mol", icon: "💊", title: "Small molecule", sub: "PDB / SDF" }] as t}
+          <button type="button" class="flex flex-col items-start rounded-xl border p-5 text-left transition-all {buildType === t.id ? 'border-cyan-500 bg-cyan-50/80 ring-2 ring-cyan-200 shadow-md shadow-cyan-100' : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-sm'}" onclick={() => (buildType = t.id)} aria-pressed={buildType === t.id}>
+            <span class="text-3xl mb-2">{t.icon}</span><span class="text-base font-semibold text-zinc-900">{t.title}</span><span class="text-xs text-zinc-500 mt-1">{t.sub}</span>
           </button>
         {/each}
       </div>
-      <div class="mt-4 flex justify-end">
-        <button type="button" class="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700" onclick={next}>Avanti →</button>
-      </div>
+      <div class="mt-6 flex justify-end"><button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={next}>Avanti →</button></div>
     </div>
   {/if}
 
-  <!-- STEP 2: composizione -->
+  <!-- STEP 2 -->
   {#if step === 2}
-    <div class="rounded-xl border border-zinc-200 bg-white p-4">
+    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Composizione</h2><p class="text-sm text-zinc-500">Scegli i lipidi per ogni foglietto</p></div>
       {#if buildType !== "lipid"}
-        <div class="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-          <span class="font-semibold">⚠️ Builder locale: testato solo per lipidi.</span>
-          Per proteine, acidi nucleici e small molecules il build locale è <b>sperimentale</b>. I file caricati non vengono inviati al server (viene trasmesso solo il nome). Usa <b>PDB ID</b> oppure <b>Invia a CHARMM-GUI</b> per queste molecole.
-        </div>
+        <div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800"><span class="font-semibold">ℹ️ Builder locale:</span> testato per lipidi. Per proteine/DNA/RNA/small molecules <b>verrà inviato automaticamente a CHARMM-GUI</b> al click su "Crea struttura".</div>
       {/if}
       {#if buildType === "lipid"}
-        <!-- simmetria -->
-        <div class="mb-3 flex items-center gap-3 rounded-lg bg-zinc-50 p-2.5">
-          <span class="text-xs font-medium text-zinc-700">Foglietti:</span>
-          <button
-            type="button"
-            class="rounded-md px-3 py-1 text-xs font-medium {symmetric ? 'bg-cyan-500 text-white' : 'bg-white text-zinc-600 ring-1 ring-zinc-200 hover:bg-zinc-100'}"
-            onclick={() => { symmetric = true; }}
-            aria-pressed={symmetric}
-          >Composizione identica</button>
-          <button
-            type="button"
-            class="rounded-md px-3 py-1 text-xs font-medium {!symmetric ? 'bg-cyan-500 text-white' : 'bg-white text-zinc-600 ring-1 ring-zinc-200 hover:bg-zinc-100'}"
-            onclick={() => { symmetric = false; }}
-            aria-pressed={!symmetric}
-          >Indipendente (asimmetrico)</button>
-        </div>
-
-        <!-- Preset membrane -->
-        <div class="mb-3 flex flex-wrap gap-2 rounded-lg bg-zinc-50 p-2">
-          <span class="text-xs font-medium text-zinc-600">Preset:</span>
-          {#each Object.entries(PRESETS) as [key, p] (key)}
-            <button
-              type="button"
-              class="rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs text-zinc-700 hover:bg-cyan-50 hover:border-cyan-300 transition-colors"
-              onclick={() => applyPreset(key)}
-              title={p.label}
-            >{key}</button>
-          {/each}
-        </div>
-
-        {#if !symmetric}
-          <div class="mb-3 flex gap-2">
-            <button type="button" class="rounded-lg px-4 py-1.5 text-xs font-semibold {activeSide === 'upper' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600'}" onclick={() => (activeSide = "upper")}>Foglio superiore ({totalCounts(upperCounts)})</button>
-            <button type="button" class="rounded-lg px-4 py-1.5 text-xs font-semibold {activeSide === 'lower' ? 'bg-zinc-900 text-white' : 'bg-zinc-100 text-zinc-600'}" onclick={() => (activeSide = "lower")}>Foglio inferiore ({totalCounts(lowerCounts)})</button>
+        <div class="mb-4"><span class="text-xs font-semibold text-zinc-600 mb-2 block">Preset:</span><div class="flex flex-wrap gap-2">{#each Object.entries(PRESETS) as [k, p] (k)}<button type="button" class="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm text-zinc-700 hover:bg-cyan-50" onclick={() => applyPreset(k)} title={p.label}>{k}</button>{/each}</div></div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div class="lg:col-span-1">
+            <div class="flex items-center justify-between mb-3"><h3 class="text-sm font-semibold text-zinc-900">Catalogo</h3><input type="search" bind:value={search} placeholder="Cerca lipide…" class="w-64 rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-800 placeholder-zinc-400 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" /></div>
+            <div class="max-h-96 overflow-y-auto rounded-lg border border-zinc-100 p-2 space-y-1">{#each filtered() as l (l.id)}<div class="flex items-center justify-between rounded-lg px-3 py-2 {countOf(l.id) > 0 ? 'bg-cyan-50/60' : 'hover:bg-zinc-50 cursor-pointer'}"><div class="flex items-center gap-3"><span class="h-2 w-2 rounded-full" style="background-color: {CAT_COLORS[l.cat] || '#a1a1aa'}"></span><span class="text-sm font-semibold text-zinc-900">{l.id}</span><span class="text-[10px] text-zinc-400">{l.cat}</span></div><div class="flex items-center gap-2"><button type="button" class="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-lg font-bold text-zinc-600 hover:bg-zinc-200 disabled:opacity-40" onclick={() => sub(l.id)} disabled={countOf(l.id) === 0} aria-label="Rimuovi {l.id}">−</button><span class="w-8 text-center text-sm font-bold tabular-nums text-zinc-900">{countOf(l.id)}</span><button type="button" class="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-500 text-lg font-bold text-white hover:bg-cyan-600 shadow-sm shadow-cyan-200" onclick={() => add(l.id)} aria-label="Aggiungi {l.id}">+</button></div></div>{/each}</div>
           </div>
-        {/if}
-
-        <!-- selezionati -->
-        {#if selectedList().length > 0}
-          <div class="mb-3 flex flex-wrap gap-1.5 rounded-lg bg-cyan-50/50 p-2">
-            {#each selectedList() as [id, n] (id)}
-              <span class="flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-zinc-800 ring-1 ring-zinc-200">
-                {id} <span class="text-zinc-400">×</span> {n}
-                <button type="button" class="text-zinc-400 hover:text-red-500" onclick={() => sub(id)} aria-label="Rimuovi {id}">✕</button>
-              </span>
-            {/each}
+          <div class="lg:col-span-1">
+            <h3 class="text-sm font-semibold text-zinc-900 mb-3">Foglio {activeSide === 'upper' ? 'superiore' : 'inferiore'}</h3>
+            {#if selectedList().length > 0}<div class="flex flex-wrap gap-2 mb-4">{#each selectedList() as [id, n] (id)}<span class="flex items-center gap-2 rounded-full bg-white border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm">{id}<span class="text-zinc-400">×</span><span class="font-bold">{n}</span><button type="button" class="text-zinc-400 hover:text-red-500 ml-1" onclick={() => sub(id)}>✕</button></span>{/each}</div>{:else}<div class="rounded-lg bg-zinc-50 border border-zinc-200 p-6 text-center"><p class="text-xs text-zinc-500 mb-2">Nessun lipide selezionato</p><p class="text-[10px] text-zinc-400">Usa i tasti + per aggiungere</p></div>{/if}
+            <div class="mt-auto pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
           </div>
-        {/if}
-
-        <!-- ricerca + filtro -->
-        <div class="mb-2 flex gap-2">
-          <input
-            type="search"
-            bind:value={search}
-            placeholder="Cerca lipide (es. POPC, CHOL, cer…)"
-            class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-800 placeholder-zinc-400 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
-          />
-          <select
-            bind:value={catFilter}
-            class="rounded-lg border border-zinc-300 bg-white px-2 py-2 text-xs text-zinc-700 focus:border-cyan-500 focus:outline-none"
-          >
-            <option value="">Tutte le categorie</option>
-            {#each LIPID_CATEGORIES as c (c)}
-              <option value={c}>{c}</option>
-            {/each}
-          </select>
         </div>
-
-        <!-- lista catalogo -->
-        <div class="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-zinc-100 p-1">
-          {#each filtered() as l (l.id)}
-            <div class="flex items-center justify-between rounded-lg px-2 py-1.5 {countOf(l.id) > 0 ? 'bg-cyan-50/60' : 'hover:bg-zinc-50'}">
-              <div class="flex items-center gap-2">
-                <span class="h-2 w-2 rounded-full" style="background-color: {CAT_COLORS[l.cat] || '#a1a1aa'}"></span>
-                <span class="text-sm font-semibold text-zinc-800">{l.id}</span>
-                <span class="text-[10px] text-zinc-400">{l.cat}</span>
-                {#if !SUPPORTED_LOCAL.has(l.id)}
-                  <span class="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 ring-1 ring-amber-200" title="Non costruibie in locale: usa 'Invia a CHARMM-GUI'">solo CHARMM-GUI</span>
-                {/if}
-              </div>
-              <div class="flex items-center gap-1.5">
-                <button type="button" class="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-100 text-base font-bold text-zinc-600 hover:bg-zinc-200 disabled:opacity-40" onclick={() => sub(l.id)} disabled={countOf(l.id) === 0} aria-label="Rimuovi un {l.id}">−</button>
-                <span class="w-8 text-center text-sm font-bold tabular-nums text-zinc-800">{countOf(l.id)}</span>
-                <button type="button" class="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-500 text-base font-bold text-white hover:bg-cyan-600" onclick={() => add(l.id)} aria-label="Aggiungi un {l.id}">+</button>
-              </div>
-            </div>
-          {:else}
-            <p class="p-4 text-center text-xs text-zinc-400">Nessun lipide trovato — modifica la ricerca o la categoria.</p>
-          {/each}
-        </div>
-        <p class="mt-1 text-[10px] text-zinc-400">
-          {#if hasSearchOrFilter}
-            {filteredTotal()} risultati · {LIPID_CATALOG.length} lipidi disponibili nel catalogo CHARMM36
-          {:else}
-            Lipidi comuni mostrati — usa la ricerca per tutti i {LIPID_CATALOG.length} lipidi CHARMM36
-          {/if}
-          · mix laterale sempre casuale (mescolamento reale)
-        </p>
       {:else if buildType === "protein"}
-        <label class="block text-xs font-medium text-zinc-700">PDB ID (4 caratteri)</label>
-        <input type="text" bind:value={proteinPdbId} maxlength="4" placeholder="Es. 1ABC"
-          class="mt-1 w-full max-w-xs rounded-lg border border-zinc-300 px-3 py-2 text-sm uppercase tracking-widest text-zinc-800 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" />
-        <label class="mt-3 flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-dashed border-zinc-300 px-4 py-2 text-xs text-zinc-600 hover:bg-zinc-50">
-          <input type="file" accept=".pdb,.pdbqt" class="hidden" onchange={(e) => { if (e.target.files?.[0]) proteinPdbFile = e.target.files[0]; }} />
-          📁 {proteinPdbFile ? proteinPdbFile.name : "oppure carica un file PDB"}
-        </label>
+        <div class="space-y-5"><div><label class="block text-sm font-semibold text-zinc-900 mb-2">PDB ID</label><input type="text" bind:value={proteinPdbId} maxlength="4" placeholder="Es. 1ABC" class="w-full rounded-lg border border-zinc-300 px-4 py-2.5 text-sm uppercase tracking-widest text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200" /></div><div class="border border-dashed border-zinc-300 rounded-xl p-6 text-center hover:bg-zinc-50 transition-colors"><label class="flex items-center gap-3 cursor-pointer group"><input type="file" accept=".pdb,.pdbqt" class="hidden" onchange={(e) => { if (e.target.files?.[0]) proteinPdbFile = e.target.files[0]; }} /><span class="text-2xl group-hover:text-cyan-500 transition-colors">📁</span><span class="text-sm text-zinc-700">{proteinPdbFile ? proteinPdbFile.name : "oppure carica un file PDB"}</span></label></div></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
       {:else if buildType === "dna"}
-        <label class="block text-xs font-medium text-zinc-700">Sequenza DNA (A, T, G, C)</label>
-        <textarea bind:value={dnaSequence} rows="3" placeholder="ATGCCGTAAGGCTT…"
-          class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 font-mono text-sm uppercase text-zinc-800 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"></textarea>
+        <div class="space-y-5"><div><label class="block text-sm font-semibold text-zinc-900 mb-2">Sequenza DNA</label><textarea bind:value={dnaSequence} rows="4" placeholder="ATGCCGTAAGGCTT…" class="w-full rounded-lg border border-zinc-300 px-4 py-2.5 font-mono text-sm uppercase text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"></textarea></div></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
       {:else if buildType === "rna"}
-        <label class="block text-xs font-medium text-zinc-700">Sequenza RNA (A, U, G, C)</label>
-        <textarea bind:value={rnaSequence} rows="3" placeholder="AUGCCGUAAGGCUU…"
-          class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 font-mono text-sm uppercase text-zinc-800 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"></textarea>
-      {:else if buildType === "small-mol"}
-        <label class="flex w-fit cursor-pointer flex-col gap-1 rounded-xl border-2 border-dashed border-zinc-300 px-8 py-6 text-center hover:border-cyan-400 hover:bg-cyan-50/30">
-          <span class="text-2xl">💊</span>
-          <span class="text-xs text-zinc-600">{smallMolFile ? smallMolFile.name : "Trascina o scegli un file PDB / SDF / MOL"}</span>
-          <input type="file" accept=".pdb,.sdf,.mol" class="hidden" onchange={(e) => { if (e.target.files?.[0]) smallMolFile = e.target.files[0]; }} />
-        </label>
+        <div class="space-y-5"><div><label class="block text-sm font-semibold text-zinc-900 mb-2">Sequenza RNA</label><textarea bind:value={rnaSequence} rows="4" placeholder="AUGCCGUAAGGCUU…" class="w-full rounded-lg border border-zinc-300 px-4 py-2.5 font-mono text-sm uppercase text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"></textarea></div></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
+      {:else}
+        <div class="space-y-5"><div class="border-2 border-dashed border-zinc-300 rounded-2xl p-8 text-center hover:border-cyan-400 hover:bg-cyan-50/30 transition-colors"><span class="text-4xl mb-3 block">💊</span><span class="text-xs text-zinc-600 mb-2 block">Trascina o scegli un file</span><input type="file" accept=".pdb,.sdf,.mol" class="hidden" onchange={(e) => { if (e.target.files?.[0]) smallMolFile = e.target.files[0]; }} /><label class="cursor-pointer group"><span class="text-sm text-zinc-700 group-hover:text-cyan-600">{smallMolFile ? smallMolFile.name : "PDB / SDF / MOL"}</span></label></div></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
       {/if}
-
-      <div class="mt-4 flex justify-between">
-        <button type="button" class="rounded-lg px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100" onclick={back}>← Indietro</button>
-        <button type="button" class="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300" onclick={next} disabled={!stepValid()}>Avanti →</button>
-      </div>
     </div>
   {/if}
 
-  <!-- STEP 3: ambiente -->
+  <!-- STEP 3 -->
   {#if step === 3}
-    <div class="rounded-xl border border-zinc-200 bg-white p-4">
-      <div class="grid grid-cols-3 gap-3">
-        {#each [["Box X (nm)", boxX, "boxX"], ["Box Y (nm)", boxY, "boxY"], ["Box Z (nm)", boxZ, "boxZ"]] as [label, val, key] (key)}
-          <div>
-            <label class="block text-xs font-medium text-zinc-600">{label}</label>
-            <input type="number" step="0.5" min="2" value={val}
-              oninput={(e) => { if (key === "boxX") boxX = +e.target.value; if (key === "boxY") boxY = +e.target.value; if (key === "boxZ") boxZ = +e.target.value; }}
-              class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-800 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" />
+    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Ambiente</h2><p class="text-sm text-zinc-500">Box, solvente e ioni</p></div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div class="space-y-4">
+          <h3 class="text-sm font-semibold text-zinc-900">Box (nm)</h3>
+          <div class="grid grid-cols-3 gap-3">
+            <div class="flex flex-col"><label class="text-xs text-zinc-500 mb-1">X</label><input type="number" step="0.5" min="2" bind:value={boxX} class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" /></div>
+            <div class="flex flex-col"><label class="text-xs text-zinc-500 mb-1">Y</label><input type="number" step="0.5" min="2" bind:value={boxY} class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" /></div>
+            <div class="flex flex-col"><label class="text-xs text-zinc-500 mb-1">Z</label><input type="number" step="0.5" min="2" bind:value={boxZ} class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" /></div>
           </div>
-        {/each}
-      </div>
-      <label class="mt-3 flex w-fit cursor-pointer items-center gap-2 text-xs text-zinc-700">
-        <input type="checkbox" bind:checked={centerStructure} class="accent-cyan-500" />
-        Centra la struttura nel box
-      </label>
-      <div class="mt-4 grid grid-cols-2 gap-3">
-        <div>
-          <label class="block text-xs font-medium text-zinc-600">Solvente</label>
-          <select bind:value={solvent} class="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-800 focus:border-cyan-500 focus:outline-none">
-            <option value="water">Acqua TIP3P</option>
-            <option value="none">Nessuno</option>
-          </select>
+          <label class="flex items-center gap-3 mt-2"><input type="checkbox" bind:checked={centerStructure} class="accent-cyan-500" /><span class="text-sm text-zinc-700 cursor-pointer">Centra nel box</span></label>
         </div>
-        <div>
-          <label class="block text-xs font-medium text-zinc-600">Ioni</label>
-          <select bind:value={ions} class="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-800 focus:border-cyan-500 focus:outline-none">
-            <option value="KCl">KCl 0.15 M</option>
-            <option value="NaCl">NaCl 0.15 M</option>
-            <option value="none">Nessuno</option>
-          </select>
+        <div class="space-y-4">
+          <div><label class="block text-sm font-semibold text-zinc-900 mb-3">Solvente</label><select bind:value={solvent} class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"><option value="water">Acqua TIP3P</option><option value="none">Nessuno</option></select></div>
+          <div><label class="block text-sm font-semibold text-zinc-900 mb-3">Ioni</label><select bind:value={ions} class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"><option value="KCl">KCl 0.15 M</option><option value="NaCl">NaCl 0.15 M</option><option value="none">Nessuno</option></select></div>
         </div>
       </div>
-      <p class="mt-3 rounded-lg bg-zinc-50 p-2 text-[10px] leading-relaxed text-zinc-500">
-        ℹ️ I lipidi vengono posizionati con <b>mescolamento laterale casuale</b> (seed riproducibile), come in una membrana reale. La scelta piano/mosaico non esiste più: è sempre mosaico.
-      </p>
-      <div class="mt-4 flex justify-between">
-        <button type="button" class="rounded-lg px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100" onclick={back}>← Indietro</button>
-        <button type="button" class="rounded-lg bg-zinc-900 px-5 py-2 text-sm font-medium text-white hover:bg-zinc-700" onclick={next}>Avanti →</button>
-      </div>
+      <div class="mt-6 rounded-lg bg-zinc-50 border border-zinc-200 p-4"><p class="text-xs text-zinc-500 leading-relaxed"><span class="font-semibold text-zinc-700">ℹ️ Mescolamento laterale:</span> specie distribuite casualmente nei foglietti (seed riproducibile), come in una membrana reale.</p></div>
+      <div class="mt-6 flex justify-between"><button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200" onclick={next}>Avanti →</button></div>
     </div>
   {/if}
-
-  <!-- STEP 4: riepilogo -->
+  <!-- STEP 4 -->
   {#if step === 4}
-    <div class="rounded-xl border border-zinc-200 bg-white p-4">
+    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+      <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Riepilogo</h2><p class="text-sm text-zinc-500">Verifica prima di generare</p></div>
       {#if buildType !== "lipid"}
-        <div class="mb-3 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
-          <span class="font-semibold">⚠️ Builder locale: testato solo per lipidi.</span>
-          Per proteine, acidi nucleici e small molecules il build locale è <b>sperimentale</b>. I file caricati non vengono inviati al server (viene trasmesso solo il nome). Usa <b>PDB ID</b> oppure <b>Invia a CHARMM-GUI</b> per queste molecole.
-        </div>
+        <div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800"><span class="font-semibold">ℹ️ Builder locale:</span> testato per lipidi. Per proteine/DNA/RNA/small molecules <b>verrà inviato automaticamente a CHARMM-GUI</b> al click su "Crea struttura".</div>
       {/if}
-      <div class="rounded-lg bg-zinc-50 p-3 font-mono text-xs leading-relaxed text-zinc-700">
+      <div class="rounded-lg bg-zinc-50 border border-zinc-200 p-5 font-mono text-xs leading-relaxed text-zinc-800">
         {#if buildType === "lipid"}
-          <div><span class="text-zinc-400">superiore:</span> {specString(upperCounts) || "—"}</div>
-          <div><span class="text-zinc-400">inferiore:</span> {symmetric ? specString(upperCounts) || "—" : specString(lowerCounts) || "—"}</div>
+          <div class="flex justify-between mb-1"><span class="text-zinc-500">Superiore:</span> <span class="font-bold">{specString(upperCounts) || "—"}</span></div>
+          <div class="flex justify-between mb-1"><span class="text-zinc-500">Inferiore:</span> <span class="font-bold">{symmetric ? specString(upperCounts) || "—" : specString(lowerCounts) || "—"}</span></div>
         {:else if buildType === "protein"}
-          <div><span class="text-zinc-400">proteina:</span> {proteinPdbId || proteinPdbFile?.name}</div>
+          <div class="flex justify-between mb-1"><span class="text-zinc-500">Proteina:</span> <span class="font-bold">{proteinPdbId || proteinPdbFile?.name}</span></div>
         {:else if buildType === "dna"}
-          <div><span class="text-zinc-400">DNA:</span> {dnaSequence}</div>
+          <div class="flex justify-between mb-1"><span class="text-zinc-500">DNA:</span> <span class="font-bold">{dnaSequence}</span></div>
         {:else if buildType === "rna"}
-          <div><span class="text-zinc-400">RNA:</span> {rnaSequence}</div>
+          <div class="flex justify-between mb-1"><span class="text-zinc-500">RNA:</span> <span class="font-bold">{rnaSequence}</span></div>
         {:else}
-          <div><span class="text-zinc-400">small molecule:</span> {smallMolFile?.name}</div>
+          <div class="flex justify-between mb-1"><span class="text-zinc-500">Small molecule:</span> <span class="font-bold">{smallMolFile?.name}</span></div>
         {/if}
-        <div class="mt-1"><span class="text-zinc-400">box:</span> {boxX}×{boxY}×{boxZ} nm · centratura: {centerStructure ? "sì" : "no"}</div>
-        <div><span class="text-zinc-400">solvente:</span> {solvent === "water" ? "acqua TIP3P" : "nessuno"} · <span class="text-zinc-400">ioni:</span> {ions}</div>
+        <div class="flex justify-between mb-1"><span class="text-zinc-500">Box:</span> <span class="font-bold">{boxX}×{boxY}×{boxZ} nm</span></div>
+        <div class="flex justify-between mb-1"><span class="text-zinc-500">Solvente:</span> <span class="font-bold">{solvent === "water" ? "acqua TIP3P" : "nessuno"}</span></div>
+        <div class="flex justify-between"><span class="text-zinc-500">Ioni:</span> <span class="font-bold">{ions}</span></div>
       </div>
-
-      <!-- Metriche post-build -->
       {#if buildMetrics}
-        <div class="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 p-3">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="text-emerald-700 font-semibold text-xs">📊 Metriche build</span>
-          </div>
-          <div class="grid grid-cols-2 gap-3 text-xs">
-            <div><span class="text-zinc-500">Spessore P-P:</span> <span class="font-mono">{buildMetrics.thickness_P_nm} nm</span></div>
-            <div><span class="text-zinc-500">APL misurata:</span> <span class="font-mono">{buildMetrics.apl_measured_nm2} nm²</span></div>
-            <div><span class="text-zinc-500">APL attesa:</span> <span class="font-mono">{buildMetrics.apl_expected_nm2} nm²</span></div>
-            <div><span class="text-zinc-500">Acqua/lipide:</span> <span class="font-mono">{buildMetrics.water_per_lipid}</span></div>
-            <div><span class="text-zinc-500">Carica lipidi:</span> <span class={`font-mono ${chargeColor}`}>{buildMetrics.net_lipid_charge_e.toFixed(2)} e</span></div>
-            <div><span class="text-zinc-500">Atomi totali:</span> <span class="font-mono">{buildMetrics.natoms}</span></div>
-          </div>
-        </div>
+        <div class="mt-5 rounded-lg bg-emerald-50 border border-emerald-200 p-4"><div class="flex items-center gap-2 mb-3"><span class="text-emerald-700 font-semibold text-xs">📊 Metriche build</span></div><div class="grid grid-cols-2 gap-3 text-xs"><div><span class="text-zinc-500">Spessore P-P:</span> <span class="font-mono text-zinc-900">{buildMetrics.thickness_P_nm} nm</span></div><div><span class="text-zinc-500">APL misurata:</span> <span class="font-mono text-zinc-900">{buildMetrics.apl_measured_nm2} nm²</span></div><div><span class="text-zinc-500">APL attesa:</span> <span class="font-mono text-zinc-900">{buildMetrics.apl_expected_nm2} nm²</span></div><div class="col-span-2"><span class="text-zinc-500">Carica lipidi:</span> <span class={`font-mono ${chargeColor} text-zinc-900`}>{buildMetrics.net_lipid_charge_e.toFixed(2)} e</span></div><div><span class="text-zinc-500">Atomi totali:</span> <span class="font-mono text-zinc-900">{buildMetrics.natoms}</span></div></div></div>
       {/if}
-
-      <!-- Salva / carica composizione -->
-      <div class="mt-4 rounded-lg bg-zinc-50 p-3">
-        <div class="flex items-center gap-2 mb-2">
-          <span class="text-zinc-600 font-semibold text-xs">💾 Composizione</span>
-        </div>
-        <div class="flex flex-col sm:flex-row gap-2">
-          <button
-            type="button"
-            onclick={saveJson}
-            class="flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-100"
-          >Scarica JSON</button>
-          <label class="flex-1 rounded border border-zinc-300 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-100 cursor-pointer">
-            Carica JSON
-            <input type="file" accept=".json" class="hidden" onchange={loadJson} />
-          </label>
-        </div>
-      </div>
-
-      <!-- Log build -->
+      <div class="mt-5 rounded-lg bg-zinc-50 border border-zinc-200 p-4"><div class="flex items-center gap-2 mb-3"><span class="text-zinc-600 font-semibold text-xs">💾 Composizione</span></div><div class="flex flex-col sm:flex-row gap-3"><button type="button" onclick={saveJson} class="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-700 hover:bg-zinc-100">Scarica JSON</button><label class="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-700 hover:bg-zinc-100 cursor-pointer">Carica JSON<input type="file" accept=".json" class="hidden" onchange={loadJson} /></label></div></div>
       {#if buildLog}
-        <div class="mt-4 rounded-lg bg-zinc-900 p-3 max-h-48 overflow-y-auto">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="text-cyan-400 font-bold text-[10px]">LOG GROMACS</span>
-            <button
-              type="button"
-              onclick={onLogClear}
-              class="text-zinc-500 hover:text-white"
-            >✕</button>
-          </div>
-          <pre class="text-[10px] text-zinc-300 overflow-x-auto">{buildLog}</pre>
-        </div>
+        <div class="mt-5 rounded-lg bg-zinc-900 p-4 max-h-64 overflow-y-auto"><div class="flex items-center gap-2 mb-3"><span class="text-cyan-400 font-bold text-[10px]">LOG GROMACS</span><button type="button" onclick={onLogClear} class="text-zinc-500 hover:text-white">✕</button></div><pre class="text-[10px] text-zinc-300 overflow-x-auto">{buildLog}</pre></div>
       {/if}
-
-      <div class="mt-4 flex flex-col gap-2 sm:flex-row">
-        <button type="button" class="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:bg-zinc-300" onclick={create} disabled={propLocalBusy || !stepValid()}>
-          {#if propLocalBusy}
-            <span class="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></span>
-            Costruzione in corso…
-          {:else}
-            ▶ Crea struttura (locale, GROMACS)
-          {/if}
-        </button>
-        <button type="button" class="flex-1 rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-500" onclick={submit}>
-          Invia a CHARMM-GUI
-        </button>
-      </div>
-      <div class="mt-4 flex justify-between">
-        <button type="button" class="rounded-lg px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100" onclick={back}>← Indietro</button>
-      </div>
+      <div class="mt-6 flex flex-col sm:flex-row gap-4"><button type="button" class="flex-1 rounded-xl bg-emerald-600 px-6 py-3.5 text-base font-semibold text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200 disabled:bg-zinc-300 disabled:cursor-not-allowed" onclick={create} disabled={propLocalBusy || !stepValid()}>{#if propLocalBusy}<span class="inline-block w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></span>{buildType === "lipid" ? "Costruzione in corso…" : "Invio in corso…"}{:else}{buildType === "lipid" ? "▶ Crea struttura (locale, GROMACS)" : "▶ Invia a CHARMM-GUI"}{/if}</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3.5 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200" onclick={submit}>Invia a CHARMM-GUI</button></div>
+      <div class="mt-4 flex justify-between"><button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button></div>
     </div>
   {/if}
 </div>

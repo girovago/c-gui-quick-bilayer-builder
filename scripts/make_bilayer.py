@@ -778,6 +778,173 @@ def generate_top(
     return "\n".join(lines) + "\n"
 
 
+def _count_gro_residues(gro_path: str) -> dict[str, int]:
+    """Conta le molecole per resname in un file .gro GROMACS.
+
+    Conta ogni residuo unico (numero di residuo + nome) una sola volta,
+    indipendentemente da quanti atomi ha (es. SOL ha 3 atomi).
+    """
+    counts: dict[str, int] = {}
+    seen_res: set[tuple[int, str]] = set()
+    with open(gro_path) as f:
+        lines = f.readlines()
+        if len(lines) < 2:
+            return counts
+        try:
+            natoms = int(lines[1].strip())
+        except ValueError:
+            return counts
+        for i in range(2, min(2 + natoms, len(lines))):
+            line = lines[i]
+            if len(line) < 10:
+                continue
+            resno_str = line[:5].strip()
+            resname = line[5:10].strip()
+            if not resname:
+                continue
+            try:
+                resno = int(resno_str)
+            except ValueError:
+                continue
+            key = (resno, resname)
+            if key not in seen_res:
+                seen_res.add(key)
+                counts[resname] = counts.get(resname, 0) + 1
+    return counts
+
+
+def _update_top_molecules(top_path: Path, molecules: dict[str, int]) -> None:
+    """Riscrive la sezione [molecules] del .top con i conteggi forniti.
+
+    Se [molecules] esiste già, viene sostituita. Altrimenti viene creata
+    prima di [system] o in fondo al file.
+    """
+    with open(top_path) as f:
+        content = f.read()
+
+    lines = content.splitlines(keepends=True)
+    new_mol_lines = ["[ molecules ]\n", "; Compound        #mols\n"]
+    for name in sorted(molecules):
+        count = molecules[name]
+        new_mol_lines.append(f"{name:<16s} {count:6d}\n")
+    new_mol_lines.append("\n")
+
+    # Trova la sezione [molecules] esistente
+    mol_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == "[ molecules ]":
+            mol_idx = i
+            break
+
+    if mol_idx is not None:
+        # Trova dove finisce la sezione (riga vuota o prossima [])
+        end_idx = mol_idx + 2  # salta [molecules] e commento
+        while end_idx < len(lines):
+            stripped = lines[end_idx].strip()
+            if stripped == "" or stripped.startswith("["):
+                break
+            end_idx += 1
+        lines[mol_idx:end_idx] = new_mol_lines
+    else:
+        # Non c'è [molecules]: inserisci prima di [system] o in fondo
+        sys_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == "[ system ]":
+                sys_idx = i
+                break
+        if sys_idx is not None:
+            lines[sys_idx:sys_idx] = new_mol_lines
+        else:
+            lines.extend(new_mol_lines)
+
+    with open(top_path, "w") as f:
+        f.writelines(lines)
+
+
+def _is_molecules_directive(line: str) -> bool:
+    """Verifica se una riga è la direttiva [molecules] (con o senza spazi)."""
+    return line.strip().replace(" ", "") == "[molecules]"
+
+
+def _is_section_directive(line: str) -> bool:
+    """Verifica se una riga è l'inizio di una nuova sezione [..]."""
+    s = line.strip()
+    return s.startswith("[") and s.endswith("]") and len(s) > 2
+
+
+def _ensure_top_molecules(top_path: Path, gro_path: str,
+                          upper: dict[str, int], lower: dict[str, int]) -> None:
+    """Riscrive la sezione [molecules] del .top basandosi sul .gro ionizzato.
+
+    solvate -p e genion -p possono creare sezioni [molecules] duplicate o
+    errate. Questa funzione le rimuove tutte e ne inserisce una sola corretta
+    dopo [system], come richiesto da GROMACS.
+    """
+    gro_counts = _count_gro_residues(gro_path)
+    n_sol = gro_counts.get("SOL", 0)
+    n_na = gro_counts.get("NA", 0) + gro_counts.get("K", 0)
+    n_cl = gro_counts.get("CL", 0)
+
+    needed: dict[str, int] = {}
+    for name in sorted(set(upper) | set(lower)):
+        rtp_name = LIPID_NAME_MAP.get(name, name)
+        total_count = upper.get(name, 0) + lower.get(name, 0)
+        if total_count > 0:
+            needed[rtp_name] = total_count
+    if n_sol > 0:
+        needed["SOL"] = n_sol
+    if n_na > 0:
+        needed["NA"] = n_na
+    if n_cl > 0:
+        needed["CL"] = n_cl
+
+    with open(top_path) as f:
+        lines = f.readlines()
+
+    # Trova [system] e la prima [molecules] dopo di esso
+    sys_idx = None
+    mol_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == "[ system ]":
+            sys_idx = i
+        elif sys_idx is not None and stripped.replace(" ", "") == "[molecules]":
+            mol_idx = i
+            break
+
+    if sys_idx is not None:
+        # Trova la fine di [system] (riga vuota o prossima sezione [])
+        end_idx = sys_idx + 2
+        while end_idx < len(lines):
+            stripped = lines[end_idx].strip()
+            if stripped == "" or stripped.startswith("["):
+                break
+            end_idx += 1
+        keep_lines = lines[:end_idx]
+    else:
+        keep_lines = lines[:mol_idx] if mol_idx is not None else lines
+
+    # Aggiungi la nuova [molecules]
+    # Ordine molecole: lipidi prima, poi SOL, poi ioni (ordine del .gro)
+    def mol_order(name):
+        if name == "SOL":
+            return 1
+        if name in ("NA", "CL", "K"):
+            return 2
+        return 0  # lipidi prima
+    new_mol = ["[ molecules ]\n", "; Compound        #mols\n"]
+    for name in sorted(needed, key=mol_order):
+        new_mol.append(f"{name:<16s} {needed[name]:6d}\n")
+    new_mol.append("\n")
+
+    keep_lines.extend(new_mol)
+
+    with open(top_path, "w") as f:
+        f.writelines(keep_lines)
+    print(f"  .top riscritto: {needed}")
+
+
+
 def generate_mdp(box_x: float = 12.0, box_y: float = 12.0, box_z: float = 12.0) -> str:
     """Genera un file .mdp per minimizzazione energia (steepest descent)."""
     return f""";
@@ -1000,8 +1167,8 @@ def _gmx_pipeline(
     n_cat, n_an, net = ion_counts(upper, lower, box_x, box_y, box_z, ion_conc)
     pname = "K" if ion_type == "KCl" else "NA"
     ionized_gro = str((system_dir / "ionized.gro").resolve())
-    # genion chiede il gruppo solvente in modo interattivo: "SOL\n" via stdin
-    r = gmx(["genion", "-s", tpr_ion, "-p", top_abs, "-o", ionized_gro,
+    # genion SENZA -p: aggiorniamo manualmente il .top dopo
+    r = gmx(["genion", "-s", tpr_ion, "-o", ionized_gro,
              "-np", str(n_cat), "-nn", str(n_an),
              "-pname", pname, "-nname", "CL"],
             input_text="SOL\n")
@@ -1010,8 +1177,13 @@ def _gmx_pipeline(
         return False
     print(f"gmx genion: OK ({n_cat} {pname}+, {n_an} CL-, carica lipidi {net:+g} e)")
 
+    # Verifica che il .top abbia tutte le molecole (lipidi + SOL + NA + CL).
+    # solvate -p e genion -p dovrebbero averlo già aggiornato; se manca
+    # qualcosa, lo aggiungiamo manualmente basandoci sul .gro ionizzato.
+    _ensure_top_molecules(Path(top_abs), ionized_gro, upper, lower)
+
     minim_tpr = str((system_dir / "minim.tpr").resolve())
-    r = gmx(["grompp", "-f", mdp_path, "-c", ionized_gro,
+    r = gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", ionized_gro,
              "-p", top_abs, "-o", minim_tpr])
     if r.returncode != 0:
         print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
