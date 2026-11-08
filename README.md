@@ -119,9 +119,13 @@ python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POP
 | `--solvent` | water | `water` (acqua TIP3P) o `none` |
 | `--ions` | KCl | `KCl`, `NaCl` o `none` |
 | `--output` | results | Directory base output |
-| `--run-gmx` | — | Esegue anche GROMACS (editconf → solvate → genion → grompp → mdrun) |
+| `--run-gmx` | — | Esegue GROMACS: editconf → solvate → genion → grompp. La minimizzazione mdrun è opt-in (`--minimize`) perché su laptop può superare i 5 min |
+| `--minimize` / `--min-timeout` | off / 900 | Esegue anche `gmx mdrun` (steep) con timeout in secondi |
 | `--build-type` | lipid | `lipid`, `protein`, `dna`, `rna`, `small-mol` |
-| `--pdb` | — | File PDB o ID PDB di una proteina |
+| `--pdb` | — | ID PDB (es. `7CFN`) o file PDB: la proteina viene orientata, pre-processata con `gmx pdb2gmx` (CHARMM36) e inserita al centro del bilayer (modulo `scripts/embed_protein.py`) |
+| `--pdb-chain` | tutte | Chain da mantenere (es. `R` per GPBAR1 in 7CFN) |
+| `--pdb-prefer` | OPM | Orientamento: `OPM`, `PPM`, `none` (passthrough: il mid del dominio TM va su z=0) |
+| `--pdb-fix-missing` | off | Converte a GLY i residui con side chain incompleta (tipico cryo-EM) per far passare pdb2gmx |
 | `--dna` | — | Sequenza DNA (es. ATGC) |
 | `--rna` | — | Sequenza RNA (es. AUGC) |
 | `--small-mol` | — | File PDB/SDF di una small molecule |
@@ -133,6 +137,9 @@ python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POP
 - **Bilanciamento cariche**: calcolo carica netta dai lipidi (tramite lipid.rtp CHARMM36) e aggiunta automatica di ioni via `gmx genion` (neutralizzazione + concentrazione target)
 - **Geometrie sterane dedicate**: colesterolo CHL1 con 4 anelli fused (OH verso acqua, catena verso core), non catene generiche
 - **PDB coerente col .top**: nomi atomi da lipid.rtp (evita mismatch grompp)
+- **Spessore P-P volumetrico**: D_B calcolato dai volumi CHARMM36 dei lipidi con correzione sterolo (×1.2), non da costanti fisse — verificato POPC 3.78 nm, POPC+CHL1 3.95 nm (range sperimentale 3.7–4.1)
+- **Proteina nel bilayer (`--pdb`)**: orientamento OPM/PPM/passthrough, `pdb2gmx` con termini chamati charmm36 + `cmap`, split topology per chain, carica netta reale letta dal .itp e compensata da genion (8 CL⁻ extra per GPBAR1 +8 e), centraggio del dominio TM su z=0, `[ molecules ]` con proteina in prima riga (ordine coerente col PDB)
+- **Run "grompp-ready" pronto**: senza `--minimize` il flusso GROMACS termina con `minim.tpr` in ~2 min su laptop (E7440), con `metrics.json` sempre scritta
 
 ### Output GROMACS nativo
 

@@ -44,8 +44,10 @@ from pathlib import Path
 # Costanti geometriche (nanometri)
 # ---------------------------------------------------------------------------
 
-HEAD_Z = 2.6          # posizione teste polari (fuori dal bilayer)
-TAIL_END_Z = 0.2      # estremità code (verso centro bilayer)
+# HEAD_Z NON è più una costante: lo spessore del bilayer (D_B) viene
+# calcolato dalla composizione (volumi/APL, vedi bilayer_thickness) e le
+# teste polari vanno a ±D_B/2 (v. generate_pdb).
+TAIL_END_Z = 0.05     # estremità code (verso il centro del bilayer)
 LIPID_RADIUS = 0.55   # raggio occupato da un lipide nel piano xy (nm)
 
 # Area per lipide (nm^2) a ~303 K — Kucerka et al. 2011, Ingólfsson et al. 2014.
@@ -62,6 +64,73 @@ DEFAULT_APL = 0.62
 APL_HEADGROUP_FALLBACK = {
     "PC": 0.66, "PE": 0.56, "PS": 0.62, "PA": 0.56, "PG": 0.60, "PI": 0.58,
 }
+
+# Volume molecolare per lipide (nm^3) — Kucerka et al. 2011, Pan et al. 2004,
+# Ingólfsson et al. 2014. Usato con APL per la geometria verticale.
+LIPID_VOLUME_NM3 = {
+    "POPC": 1.29, "DOPC": 1.30, "DPPC": 1.28, "DMPC": 1.25, "DSPC": 1.30,
+    "DLPC": 1.20, "POPE": 1.19, "DOPE": 1.30, "DPPE": 1.24,
+    "POPS": 1.30, "DOPS": 1.32, "DPPS": 1.29,
+    "POPA": 1.24, "POPG": 1.22, "POPI": 1.35,
+    "PSM": 1.24, "NSM": 1.24, "OSM": 1.24, "SM": 1.24,
+    "TOCL1": 2.30, "TLCL1": 2.30,
+    "CHL1": 0.42,
+}
+DEFAULT_VOLUME = 1.25
+STEROL_NAMES = ("CHL1", "CHOL")  # CHOL è l'alias da spec (mappato a CHL1)
+
+
+def volume_for(name: str) -> float:
+    """Volume molecolare (nm^3) per specie; fallback sulle specie note."""
+    if name in LIPID_VOLUME_NM3:
+        return LIPID_VOLUME_NM3[name]
+    mapped = LIPID_NAME_MAP.get(name, name)
+    if mapped in LIPID_VOLUME_NM3:
+        return LIPID_VOLUME_NM3[mapped]
+    return DEFAULT_VOLUME
+
+
+def _is_sterol(name: str) -> bool:
+    if name in STEROL_NAMES:
+        return True
+    return LIPID_NAME_MAP.get(name) in STEROL_NAMES
+
+
+def _sheet_geometry(d: dict[str, int]) -> tuple[float, float, float]:
+    """(volume_totale, area_totale, frazione molare sterolo) di un foglietto."""
+    vol = sum(count * volume_for(n) for n, count in d.items())
+    area = sum(count * apl_for(n) for n, count in d.items())
+    n_sterol = sum(count for n, count in d.items() if _is_sterol(n))
+    n_tot = sum(d.values()) or 1
+    return vol, area, n_sterol / n_tot
+
+
+def bilayer_thickness(upper: dict[str, int], lower: dict[str, int]) -> float:
+    """Spessore P-P atteso (nm) dalla composizione.
+
+    D_B = 2 * Σ(n_i * V_i) / Σ(n_i * APL_i) + 1.2 * x_CHL   (leaflet simmetrico)
+
+    Per fogli asimmetrici si somma lo spessore dei due fogli (V/A di ciascuno);
+    per composizione simmetrica la formula coincide con quella sopra.
+    """
+    v_up, a_up, x_up = _sheet_geometry(upper or {})
+    v_low, a_low, x_low = _sheet_geometry(lower or {})
+    if a_up <= 0 or a_low <= 0:
+        return 0.0
+    half_up = v_up / a_up
+    half_low = v_low / a_low
+    x_chl = (x_up + x_low) / 2
+    return half_up + half_low + 1.2 * x_chl
+
+
+def autobox_xy(area_demanded: float) -> float:
+    """Lato autodimensionato per box_x/box_y: sqrt(area) + margine 0.3 nm.
+
+    Il margine tenue mantiene la APL misurata entro il 15% dall'attesa
+    (soglia del warning APL) invece del pad generoso (+1.2 nm) che
+    gonfiava l'acqua per lipide.
+    """
+    return round(math.sqrt(max(area_demanded, 1e-6)), 1) + 0.3
 
 
 def apl_for(name: str) -> float:
@@ -313,12 +382,14 @@ def _sterol_atom_lines(
     y: float,
     z_head: float,
     chain_id: str = "A",
+    mirror: bool = False,
 ) -> list[str]:
     """Righe PDB per uno sterolo (CHL1): backbone steran 4 anelli + catena.
 
     Il piano degli anelli è verticale (perpendicolare alla superficie? no:
     parallelo alla normale della membrana), OH verso l'acqua, catena verso il
-    centro del bilayer.
+    centro del bilayer. Con mirror=True le coordinate z sono negate alla
+    scrittura (foglio inferiore = specchio del superiore).
     """
     off = _sterane_offsets()
     z0 = z_head - 0.6 if z_head > 0 else -(z_head - 0.6)
@@ -356,6 +427,8 @@ def _sterol_atom_lines(
     lines: list[str] = []
     for name, _atype, _charge, _group in atoms_info:
         ox, oy, oz = coords[name]
+        if mirror:
+            oz = -oz
         elem = name[0]
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
@@ -372,13 +445,16 @@ def _lipid_atom_lines(
     y: float,
     z_head: float,
     chain_id: str = "A",
+    mirror: bool = False,
 ) -> list[str]:
     """Genera righe ATOM per un singolo lipide usando nomi atomi CHARMM36 reali
     da lipid.rtp.
 
     Le coordinate sono generate geometricamente (testa in alto, code verso il
     centro) con lunghezze di legame realistiche. I nomi degli atomi corrispondono
-    esattamente a quelli definiti in lipid.rtp.
+    esattamente a quelli definiti in lipid.rtp. Con mirror=True le coordinate z
+    vengono negate alla scrittura: il foglio inferiore è il vero specchio del
+    superiore (teste polari simmetriche, code convergenti verso il centro).
     """
     lines: list[str] = []
 
@@ -392,7 +468,8 @@ def _lipid_atom_lines(
             atom_name = f"C{i+1}" if i > 0 else "C1"
             lines.append(
                 f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
-                f"{chain_id:1s}{resno:4d}    {x:8.3f}{y:8.3f}{z_head:8.3f}  "
+                f"{chain_id:1s}{resno:4d}    {x:8.3f}{y:8.3f}"
+                f"{-z_head if mirror else z_head:8.3f}  "
                 f"1.00  0.00          C"
             )
         return lines
@@ -403,7 +480,7 @@ def _lipid_atom_lines(
     if rtp_name in STEROL_RESIDUES:
         return _sterol_atom_lines(
             rtp_name, atoms_info, residue.get("bonds", []),
-            resno, x, y, z_head, chain_id,
+            resno, x, y, z_head, chain_id, mirror,
         )
 
     # Costanti geometriche (nm)
@@ -474,7 +551,10 @@ def _lipid_atom_lines(
     # --- Catena sn-1 (da C2: C21-C218) ---
     cur = coords.get("C2", coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO)))
     cur_x, cur_y, cur_z = cur
-    dir_x, dir_y, dir_z = math.sin(TAIL_TILT), 0.0, -math.cos(TAIL_TILT)
+    # direzione code: verso il centro del bilayer (giù per il foglio
+    # superiore con z_head>0, su per il foglio inferiore passato con z_head<0)
+    flip_z = 1.0 if z_head > 0 else -1.0
+    dir_x, dir_y, dir_z = math.sin(TAIL_TILT), 0.0, -flip_z * math.cos(TAIL_TILT)
     tail1_c_names = [n for n in tail1_names if n.startswith("C")]
     for j, name in enumerate(tail1_c_names):
         cur_x += dir_x * BOND_CC
@@ -495,7 +575,7 @@ def _lipid_atom_lines(
     cur_x, cur_y, cur_z = cur
     dir_x = math.sin(TAIL_TILT) * math.cos(math.pi / 4)
     dir_y = math.sin(TAIL_TILT) * math.sin(math.pi / 4)
-    dir_z = -math.cos(TAIL_TILT)
+    dir_z = -flip_z * math.cos(TAIL_TILT)
     for j, name in enumerate(tail2_c_names):
         cur_x += dir_x * BOND_CC
         cur_y += dir_y * BOND_CC
@@ -529,6 +609,8 @@ def _lipid_atom_lines(
             cx, cy, cz = coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO))
             coords[name] = (cx + 0.05, cy + 0.05, cz + 0.05)
         ox, oy, oz = coords[name]
+        if mirror:
+            oz = -oz
         elem = name[0]  # primo carattere come elemento (approssimativo)
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
@@ -567,6 +649,14 @@ def generate_pdb(
     total_lipids = sum(upper.values()) + sum(lower.values())
     if total_lipids == 0:
         raise ValueError("nessun lipide specificato (upper e lower vuoti)")
+
+    # Spessore P-P atteso dalla composizione; le teste vanno a ±D_B/2 e il P
+    # del fosfato cade esattamente a ±D_B/2 (z_head = D_B/2 + BOND_CN).
+    thickness_db = bilayer_thickness(upper, lower)
+    head_z = thickness_db / 2 + BOND_CN
+    lines.append(
+        f"REMARK   Spessore P-P previsto (D_B): {thickness_db:.2f} nm"
+    )
 
     # area totale PER FOGLIETTO con APL reali per composizione (densità fisica)
     def _sheet_area(d: dict[str, int]) -> float:
@@ -617,16 +707,16 @@ def generate_pdb(
     for idx, resname in enumerate(upper_species):
         x, y = upper_positions[idx]
         for line in _lipid_atom_lines(
-            resname, resno, x + ox_off, y + oy_off, HEAD_Z, "U",
+            resname, resno, x + ox_off, y + oy_off, head_z, "U",
         ):
             lines.append(line)
         resno += 1
 
-    # --- Foglio inferiore ---
+    # --- Foglio inferiore (specchio del superiore) ---
     for idx, resname in enumerate(lower_species):
         x, y = lower_positions[idx]
         for line in _lipid_atom_lines(
-            resname, resno, x + ox_off, y + oy_off, -HEAD_Z, "L",
+            resname, resno, x + ox_off, y + oy_off, head_z, "L", mirror=True,
         ):
             lines.append(line)
         resno += 1
@@ -654,13 +744,15 @@ def ion_counts(
     box_y: float = 12.0,
     box_z: float = 12.0,
     ion_conc: float = 0.15,
+    extra_charges_e: float = 0.0,
 ) -> tuple[int, int, float]:
     """Numero ioni (+, -) per neutralizzare e raggiungere la concentrazione.
 
-    Ritorna (n_cation, n_anion, net_charge_e): ioni di compensazione della
-    carica dei lipidi + coppie da concentrazione.
+    extra_charges_e: carica netta di componenti esterne (es. proteina via
+    pdb2gmx) da compensare oltre ai lipidi. Ritorna (n_cation, n_anion,
+    net_charge_e): ioni di compensazione + coppie da concentrazione.
     """
-    net = net_charge(upper, lower)
+    net = net_charge(upper, lower) + extra_charges_e
     vol_nm3 = box_x * box_y * box_z
     # 0.6022 ioni per (M * nm^3)
     n_pairs = max(1, round(ion_conc * vol_nm3 * 0.6022))
@@ -912,6 +1004,37 @@ def _ensure_top_molecules(top_path: Path, gro_path: str,
             mol_idx = i
             break
 
+    # Preserva le molecole non-lipidi/solvente già in [molecules]
+    # (es. Protein_chain_X da embed_protein): devono restare PRIMA dei
+    # lipidi perché nel PDB/gro l'ordine è proteina → lipidi → solvente.
+    KNOWN_NON_PROTEIN = {"SOL", "NA", "CL", "K"} | {
+        LIPID_NAME_MAP.get(n, n) for n in set(upper) | set(lower)
+    }
+    preserved: dict[str, int] = {}
+    if mol_idx is not None:
+        j = mol_idx + 1
+        while j < len(lines):
+            stripped = lines[j].strip()
+            if stripped == "" or stripped.startswith("[") or stripped.startswith(";"):
+                if stripped.startswith("[") :
+                    break
+                j += 1
+                continue
+            parts = stripped.split()
+            if len(parts) >= 2:
+                name, count = parts[0], parts[1]
+                if name not in KNOWN_NON_PROTEIN:
+                    try:
+                        preserved[name] = preserved.get(name, 0) + int(count)
+                    except ValueError:
+                        pass
+            j += 1
+            # fine sezione = riga vuota dopo gli entry
+            if stripped == "":
+                break
+    for name, count in preserved.items():
+        needed[name] = count
+
     if sys_idx is not None:
         # Trova la fine di [system] (riga vuota o prossima sezione [])
         end_idx = sys_idx + 2
@@ -925,8 +1048,10 @@ def _ensure_top_molecules(top_path: Path, gro_path: str,
         keep_lines = lines[:mol_idx] if mol_idx is not None else lines
 
     # Aggiungi la nuova [molecules]
-    # Ordine molecole: lipidi prima, poi SOL, poi ioni (ordine del .gro)
+    # Ordine molecole: proteina, poi lipidi, poi SOL, poi ioni (ordine del .gro)
     def mol_order(name):
+        if name.startswith("Protein_chain"):
+            return -1
         if name == "SOL":
             return 1
         if name in ("NA", "CL", "K"):
@@ -1037,12 +1162,13 @@ def run_gmx(
     args: list[str],
     cwd: Path,
     input_text: str | None = None,
+    timeout: int = 300,
 ) -> subprocess.CompletedProcess:
     """Esegue un comando gmx con gestione output."""
     cmd = [gmx] + args
     return subprocess.run(
         cmd, cwd=cwd, input=input_text,
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=timeout,
     )
 
 
@@ -1072,7 +1198,7 @@ def _extract_charmm36_ff(system_dir: Path) -> None:
                 "toppar_c36_releases-main/gromacs/charmm36-feb2026_cgenff-5.0.ff/"
             ) and not m.name.endswith("/")
         ]
-        tf.extractall(system_dir, members=members)
+        tf.extractall(system_dir, members=members, filter="data")
 
     # Rinomina la directory estratta in charmm36.ff
     src = system_dir / "toppar_c36_releases-main" / "gromacs" / "charmm36-feb2026_cgenff-5.0.ff"
@@ -1118,6 +1244,161 @@ def write_manifest(outdir: Path, files: dict[str, Path]) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+def clean_chain_itp(itp_text: str) -> str:
+    """Taglia il tail pdb2gmx del chain .itp, preservando tutto il moleculetype.
+
+    pdb2gmx conclude il moleculetype con ``#ifdef POSRES`` +
+    ``#include "posre.itp"`` + ``#endif``, poi aggiunge un ``#include`` con
+    path ASSOLUTO di tip3p.itp, il blocco ``POSRES_WATER`` e resti di
+    ``[ system ]``/``[ molecules ]``. Nel master top l'acqua è già inclusa:
+    questo tail va rimosso o grompp include tip3p due volte.
+
+    Il taglio è ANCORIZZATO su ``#ifdef POSRES`` (l'unico blocco condizionale
+    dell'output pdb2gmx, sempre in coda): tutto ciò che segue il ``#endif``
+    che chiude POSRES viene rimosso. Fallback: taglio sull'include assoluto
+    di tip3p. Se né POSRES né l'include assoluto ci sono, il testo resta
+    intatto (file già pulito o formato diverso).
+    """
+    lines = itp_text.splitlines()
+    out: list[str] = []
+    anchor_seen = False
+    for line in lines:
+        stripped = line.strip()
+        if anchor_seen and stripped == "#endif":
+            return "\n".join(out) + "\n"
+        if not anchor_seen and stripped.startswith("#include") and "tip3p.itp" in stripped:
+            return "\n".join(out) + "\n"
+        if not anchor_seen and stripped == "#ifdef POSRES":
+            anchor_seen = True
+        out.append(line)
+    return itp_text  # nessun anchor trovato: testo intatto (fallback)
+
+
+def _itp_net_charge(itp_path: Path) -> float:
+    """Somma le cariche della sezione [ atoms ] di un .itp."""
+    text = itp_path.read_text()
+    m = re.search(r"\[ atoms \]\n(.*?)(?=\n\[ \w+ \]|\Z)", text, re.S)
+    if not m:
+        raise ValueError(f"sezione [ atoms ] non trovata in {itp_path}")
+    q = 0.0
+    for line in m.group(1).splitlines():
+        s = line.split(";")[0].split()
+        if len(s) >= 8:
+            q += float(s[6])
+    return round(q, 4)
+
+
+def center_protein_gro(
+    gro_text: str, tm_z_min_nm: float, tm_z_max_nm: float,
+) -> str:
+    """Centra la proteina: XY al centro shell, Z con il mid del dominio TM su z=0.
+
+    Gro è in nm; ritorna il nuovo testo .gro centrato.
+    """
+    lines = gro_text.splitlines()
+    body_start = 2  # title + natoms
+    natoms = int(lines[1].split()[0])
+    body = lines[body_start:body_start + natoms]
+    if len(body) < natoms:  # tolta vLib: fewer lines than natoms
+        raise ValueError("gro troncato: meno righe di natoms")
+    xs = [float(line[20:28]) for line in body]
+    ys = [float(line[28:36]) for line in body]
+    z_mid = (float(tm_z_min_nm) + float(tm_z_max_nm)) / 2.0
+    dx = -sum(xs) / len(xs)
+    dy = -sum(ys) / len(ys)
+    dz = -z_mid
+    new_body = []
+    for line in body:
+        x = float(line[20:28]) + dx
+        y = float(line[28:36]) + dy
+        z = float(line[36:44]) + dz
+        new_body.append(f"{line[:20]}{x:8.3f}{y:8.3f}{z:8.3f}" + line[44:])
+    return "\n".join(lines[:body_start] + new_body + lines[body_start + natoms:]) + "\n"
+
+
+def merge_protein_into_pdb(pdb_text: str, protein_gro_text: str) -> str:
+    """Inserisce le coordinate della proteina (da .gro, nm) nel PDB del bilayer.
+
+    Le linee ATOM della proteina vengono convertite a coordinate Å (×10) e
+    inserite PRIMA degli atomi del bilayer, così l'ordine nel PDB corrisponde
+    all'ordine [ molecules ] (Protein_chain_* → lipidi → SOL → ioni).
+    """
+    lines = protein_gro_text.splitlines()
+    if len(lines) < 2:
+        raise ValueError("gro vuoto o malformato")
+    natoms = int(lines[1].split()[0])
+    body = lines[2:2 + natoms]
+    prot_lines = []
+    serial = 1
+    for line in body:
+        resname = line[5:10].strip()
+        atom_name = line[10:15].strip()
+        res_no = int(line[0:5])
+        x = float(line[20:28]) * 10.0
+        y = float(line[28:36]) * 10.0
+        z = float(line[36:44]) * 10.0
+        prot_lines.append(
+            f"ATOM  {serial:5d} {atom_name:>4s} {resname:>3s} A{res_no:4d}    "
+            f"{x:8.3f}{y:8.3f}{z:8.3f}"
+        )
+        serial += 1
+    out = []
+    inserted = False
+    for line in pdb_text.splitlines():
+        if not inserted and line.startswith(("ATOM  ", "HETATM")):
+            out.extend(prot_lines)
+            out.append("TER")
+            inserted = True
+        out.append(line)
+    if not inserted:
+        out.extend(prot_lines)
+        out.append("TER")
+    return "\n".join(out) + "\n"
+
+
+def patch_top_with_protein(
+    top_text: str,
+    itp_files: dict[str, str],
+    posre_files: list[str],
+) -> str:
+    """Inserisce le molecole proteiche in topol.top.
+
+    itp_files: {chain_id: nome itp}. Inserisce #include dopo gli include del
+    force field e le righe [ molecules ] Protein_chain<X> 1 in testa.
+
+    posre_files NON va incluso esplicitamente: il chain itp di pdb2gmx
+    contiene già ``#ifdef POSRES #include "posre.itp" #endif`` (relativo,
+    risolto perché il file è copiato nella stessa dir del top). Un include
+    esplicito vorrebbe dire doppia inclusione → grompp fallisce.
+    """
+    include_lines = [f'#include "{fname}"' for fname in itp_files.values()]
+    mol_lines = [
+        f"{f'Protein_chain_{ch}':<17s} 1" for ch in itp_files
+    ]
+    out: list[str] = []
+    seen_last_ff_include = False
+    in_molecules = False
+    for line in top_text.splitlines():
+        if not seen_last_ff_include and line.startswith("#include"):
+            out.append(line)
+            if 'ions.itp' in line:
+                out.extend(include_lines)
+                seen_last_ff_include = True
+            continue
+        if line.startswith("[ molecules ]"):
+            in_molecules = True
+            out.append(line)
+            continue
+        if in_molecules and line.strip() and not line.lstrip().startswith((";", "[", "#")):
+            out.extend(mol_lines)
+            mol_lines = []
+            in_molecules = False
+        out.append(line)
+    if mol_lines:  # [ molecules ] non trovato: append in fondo
+        out.extend(mol_lines)
+    return "\n".join(out) + "\n"
+
+
 def _gmx_pipeline(
     gmx_path: str,
     system_dir: Path,
@@ -1131,14 +1412,20 @@ def _gmx_pipeline(
     box_z: float,
     ion_type: str,
     ion_conc: float,
+    protein_net_charge: float = 0.0,
+    minimize: bool = False,
+    min_timeout: int = 900,
 ) -> bool:
-    """editconf → solvate → grompp → genion → grompp → mdrun.
+    """editconf → solvate → grompp → genion → grompp → [mdrun solo con minimize].
 
-    Genion neutralizza la carica dei lipidi e porta il sale alla concentrazione
-    (flusso CHARMM-GUI). Ritorna True se la minimizzazione è completata.
+    Genion neutralizza la carica dei lipidi + proteina e porta il sale alla
+    concentrazione (flusso CHARMM-GUI). La minimizzazione mdrun è opt-in via
+    --minimize (su macchine piccole es. E7440 può superare 5 min su ~70k atomi).
+    Ritorna True se la pipeline richiesta è completata.
     """
-    def gmx(args_: list[str], input_text: str | None = None):
-        return run_gmx(gmx_path, args_, cwd=system_dir, input_text=input_text)
+    def gmx(args_: list[str], input_text: str | None = None, timeout: int = 300):
+        return run_gmx(gmx_path, args_, cwd=system_dir,
+                       input_text=input_text, timeout=timeout)
 
     boxed_gro = str((system_dir / "boxed.gro").resolve())
     r = gmx(["editconf", "-f", pdb_abs, "-o", boxed_gro,
@@ -1164,7 +1451,8 @@ def _gmx_pipeline(
         print(f"AVVISO: gmx grompp (pre-ioni) fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
 
-    n_cat, n_an, net = ion_counts(upper, lower, box_x, box_y, box_z, ion_conc)
+    n_cat, n_an, net = ion_counts(upper, lower, box_x, box_y, box_z, ion_conc,
+                                  extra_charges_e=protein_net_charge)
     pname = "K" if ion_type == "KCl" else "NA"
     ionized_gro = str((system_dir / "ionized.gro").resolve())
     # genion SENZA -p: aggiorniamo manualmente il .top dopo
@@ -1190,11 +1478,22 @@ def _gmx_pipeline(
         return False
     print("gmx grompp: OK - minim.tpr pronto")
 
-    r = gmx(["mdrun", "-s", minim_tpr,
-             "-o", str((system_dir / "minim.trr").resolve()),
-             "-c", str((system_dir / "minim.gro").resolve()),
-             "-e", str((system_dir / "minim.edr").resolve()),
-             "-g", str((system_dir / "minim.log").resolve())])
+    if not minimize:
+        print("gmx mdrun saltato (--minimize non richiesto): sistema pronto per l'equilibrazione")
+        return True
+
+    try:
+        r = gmx(["mdrun", "-s", minim_tpr,
+                 "-o", str((system_dir / "minim.trr").resolve()),
+                 "-c", str((system_dir / "minim.gro").resolve()),
+                 "-e", str((system_dir / "minim.edr").resolve()),
+                 "-g", str((system_dir / "minim.log").resolve())],
+                timeout=min_timeout)
+    except subprocess.TimeoutExpired:
+        print(f"AVVISO: mdrun interrotto dopo {min_timeout}s "
+              f"(sistema grompp-ready, minimizzazione non completata)",
+              file=sys.stderr)
+        return False
     if r.returncode != 0:
         print(f"AVVISO: gmx mdrun fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
@@ -1307,58 +1606,109 @@ echo "Fatto: md.gro"
 
 
 def compute_metrics(
-    gro_path: str,
+    pdb_path: str,
     upper: dict[str, int],
     lower: dict[str, int],
+    gro_path: str | None = None,
+    box_nm: tuple[float, float, float] | None = None,
+    extra_warnings: list[str] | None = None,
 ) -> dict:
-    """Metriche fisiche dal .gro ionizzato (parser stdlib, niente dipendenze).
+    """Metriche fisiche: spessore P-P dal PDB grezzo, APL, acqua per lipide.
 
-    Ritorna: spessore testa-testa (P-P), APL misurata, acqua per lipide,
-    atomi totali, carica ioni. Le coordinate .gro sono in nm (native GROMACS).
+    - thickness_P_nm e i conti dello ione fosfato vengono dal PDB RAW
+      (step1_pdbreader.pdb): record ATOM/HETATM, atom name [12:16] == 'P',
+      z in [46:54]. upper = z>0, lower = z<0.
+    - Da gro_path (se fornito): natoms, box, conteggio SOL. Altrimenti natoms
+      dal PDB e box da box_nm.
+    - apl_measured_nm2 = (box_x * box_y) / n_lipidi_per_foglietto, con
+      n = somma della spec upper (CHL1 non ha P: NON contare gli atomi P).
+    - Warning (non bloccanti) in metrics['warning'] se la APL devia >15%
+      dall'attesa o se l'acqua per lipide supera 80.
     """
-    res_counts: dict[str, int] = {}
+    warnings: list[str] = list(extra_warnings or [])
+
+    # --- PDB grezzo: atomi P ---
     z_p_upper: list[float] = []
     z_p_lower: list[float] = []
-    n_sol = 0
-    box = (0.0, 0.0, 0.0)
-    with open(gro_path) as f:
-        lines = f.readlines()
-        natoms = int(lines[1].strip())
-        idx = 2
-        for _ in range(natoms):
-            if idx >= len(lines):
-                break
-            line = lines[idx]
-            idx += 1
-            if len(line) < 44:
+    n_pdb_atoms = 0
+    with open(pdb_path) as f:
+        for line in f:
+            if not line.startswith(("ATOM", "HETATM")):
                 continue
-            resname = line[5:10].strip()
-            atomname = line[10:15].strip()
+            n_pdb_atoms += 1
+            if len(line) < 54:
+                continue
+            if line[12:16].strip() != "P":
+                continue
             try:
-                z = float(line[36:44])
+                z = float(line[46:54])
             except ValueError:
                 continue
-            res_counts[resname] = res_counts.get(resname, 0) + 1
-            if resname == "SOL" and atomname == "OW":
-                n_sol += 1
-            if atomname == "P":
-                (z_p_upper if z > 0 else z_p_lower).append(z)
-        for line in lines[idx:]:
-            parts = line.split()
-            if len(parts) >= 3:
-                try:
-                    box = tuple(float(v) for v in parts[:3])
-                    break
-                except ValueError:
-                    continue
+            (z_p_upper if z > 0 else z_p_lower).append(z)
+
     thickness = 0.0
     if z_p_upper and z_p_lower:
         thickness = (
             sum(z_p_upper) / len(z_p_upper) - sum(z_p_lower) / len(z_p_lower)
         )
-    n_lip_upper = sum(upper.values()) or 1
-    n_lip_total = sum(upper.values()) + sum(lower.values()) or 1
-    apl = box[0] * box[1] / n_lip_upper
+
+    # --- .gro (se c'è): natomi, box, acqua ---
+    res_counts: dict[str, int] = {}
+    n_sol = 0
+    box: tuple[float, ...] = tuple(box_nm or (0.0, 0.0, 0.0))
+    natoms = n_pdb_atoms
+    if gro_path is not None and Path(gro_path).exists():
+        with open(gro_path) as f:
+            lines = f.readlines()
+            try:
+                natoms = int(lines[1].strip())
+            except (ValueError, IndexError):
+                natoms = n_pdb_atoms
+            idx = 2
+            for _ in range(natoms):
+                if idx >= len(lines):
+                    break
+                line = lines[idx]
+                idx += 1
+                if len(line) < 44:
+                    continue
+                resname = line[5:10].strip()
+                atomname = line[10:15].strip()
+                res_counts[resname] = res_counts.get(resname, 0) + 1
+                if resname == "SOL" and atomname == "OW":
+                    n_sol += 1
+            for line in lines[idx:]:
+                parts = line.split()
+                if len(parts) >= 3:
+                    try:
+                        box = tuple(float(v) for v in parts[:3])
+                        break
+                    except ValueError:
+                        continue
+
+    n_lip_upper = sum(upper.values()) or sum(lower.values()) or 1
+    n_lip_total = (sum(upper.values()) + sum(lower.values())) or 1
+    box_x, box_y = box[0], box[1]
+    apl = (box_x * box_y) / n_lip_upper
+    apl_expected = (
+        sum(c * apl_for(n) for n, c in upper.items()) / n_lip_upper
+        if upper
+        else sum(c * apl_for(n) for n, c in lower.items()) / n_lip_upper
+    )
+    water_per_lipid = n_sol / n_lip_total
+
+    if apl_expected > 0 and abs(apl - apl_expected) / apl_expected > 0.15:
+        warnings.append(
+            f"APL misurata {apl:.3f} nm2 devia >15% dall'attesa "
+            f"{apl_expected:.3f} nm2 (box xy {box_x:.2f}x{box_y:.2f} "
+            f"{'' if box_x > 0 else 'default/errato'} per {n_lip_upper} lipidi/foglio)"
+        )
+    if water_per_lipid > 80:
+        warnings.append(
+            f"{water_per_lipid:.1f} molecole d'acqua per lipide (>80): "
+            "box troppo grande rispetto al numero di lipidi"
+        )
+
     return {
         "natoms": natoms,
         "box_nm": [round(v, 3) for v in box],
@@ -1366,11 +1716,10 @@ def compute_metrics(
         "n_phosphate_upper": len(z_p_upper),
         "n_phosphate_lower": len(z_p_lower),
         "apl_measured_nm2": round(apl, 3),
-        "apl_expected_nm2": round(
-            sum(c * apl_for(n) for n, c in upper.items()) / n_lip_upper, 3
-        ),
-        "water_per_lipid": round(n_sol / n_lip_total, 1),
+        "apl_expected_nm2": round(apl_expected, 3),
+        "water_per_lipid": round(water_per_lipid, 1),
         "net_lipid_charge_e": net_charge(upper, lower),
+        "warning": warnings,
     }
 
 
@@ -1444,15 +1793,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--run-gmx", action="store_true",
-        help="Esegue gmx editconf/solvate/grompp/mdrun se disponibile",
+        help="Esegue gmx editconf/solvate/genion/grompp se disponibile "
+             "(mdrun solo con --minimize)",
     )
     parser.add_argument(
-        "--box-x", type=float, default=12.0,
-        help="Dimensione box X in nm (default 12)",
+        "--minimize", action="store_true",
+        help="Esegue anche gmx mdrun (minimizzazione steepest) dopo "
+             "editconf/solvate/genion/grompp",
     )
     parser.add_argument(
-        "--box-y", type=float, default=12.0,
-        help="Dimensione box Y in nm (default 12)",
+        "--min-timeout", type=int, default=900,
+        help="Timeout in secondi per gmx mdrun minimizzazione (default 900)",
+    )
+    parser.add_argument(
+        "--box-x", type=float, default=None,
+        help="Dimensione box X in nm (default: auto da area composition)",
+    )
+    parser.add_argument(
+        "--box-y", type=float, default=None,
+        help="Dimensione box Y in nm (default: auto da area composition)",
     )
     parser.add_argument(
         "--box-z", type=float, default=12.0,
@@ -1488,7 +1847,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # --- Nuovi argomenti per supporto proteine, acidi nucleici, small molecules ---
     parser.add_argument(
         "--pdb", type=str, default=None,
-        help="File PDB o ID PDB di una proteina da inserire nel sistema",
+        help="ID PDB (es. 7CFN) di una proteina da orientare, topologizzare "
+             "(pdb2gmx CHARMM36) e inserire nel bilayer",
+    )
+    parser.add_argument(
+        "--pdb-chain", type=str, default=None,
+        help="Chain della proteina da mantenere (--pdb). Es. 'R' per GPBAR1 "
+             "in 7CFN; default: tutte le chain",
+    )
+    parser.add_argument(
+        "--pdb-prefer", type=str, default="OPM",
+        choices=["OPM", "PPM", "none"],
+        help="Orientamento proteina (--pdb): OPM (default), PPM, none "
+             "(passthrough: solo centro su z=0 del dominio TM)",
+    )
+    parser.add_argument(
+        "--pdb-fix-missing", action="store_true",
+        help="Converte a GLY i residui con side chain incompleta (structure "
+             "cryo-EM) per permettere pdb2gmx (--pdb)",
     )
     parser.add_argument(
         "--pdb-reader", action="store_true",
@@ -1558,6 +1934,44 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     today = date.today().isoformat()
+
+    # --- Autobox xy + warning se il box fornito non é coerente con l'area ---
+    def _sheet_area(d: dict[str, int]) -> float:
+        return sum(c * apl_for(n) for n, c in d.items())
+
+    area_demanded = max(_sheet_area(upper), _sheet_area(lower))
+    box_warnings: list[str] = []
+    if args.box_x is None and args.box_y is None:
+        auto_dim = autobox_xy(area_demanded)
+        args.box_x = auto_dim
+        args.box_y = auto_dim
+        print(
+            f"Autobox: area membrana {area_demanded:.2f} nm2 "
+            f"-> box xy = {auto_dim:.1f} nm"
+        )
+    elif args.box_x is None or args.box_y is None:
+        # una sola dimensione data: riempi con quella nota
+        if args.box_x is None:
+            args.box_x = args.box_y
+        else:
+            args.box_y = args.box_x
+    else:
+        area_box = args.box_x * args.box_y
+        if area_demanded > 0.8 * area_box:
+            msg = (
+                f"area membrana {area_demanded:.2f} nm2 > 80% del box "
+                f"({area_box:.2f} nm2): troppa membrana, poca acqua/lipide"
+            )
+            print(f"AVVISO: {msg}", file=sys.stderr)
+            box_warnings.append(msg)
+        elif area_demanded < 0.4 * area_box:
+            msg = (
+                f"area membrana {area_demanded:.2f} nm2 < 40% del box "
+                f"({area_box:.2f} nm2): troppa acqua per lipide"
+            )
+            print(f"AVVISO: {msg}", file=sys.stderr)
+            box_warnings.append(msg)
+
     label_parts: list[str] = []
     if args.membtype:
         label_parts.append(args.membtype)
@@ -1620,6 +2034,69 @@ File:
 """
     )
 
+    # --- Proteina (--pdb): orientamento + pdb2gmx + embedding (Modulo 4) ---
+    prot_net_charge = 0.0
+    prot_embed_manifest = None
+    if args.pdb:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from embed_protein import run as embed_run  # lazy import (Modulo 4)
+        prot_dir = outdir / "protein_embed"
+        prot_dir.mkdir(parents=True, exist_ok=True)
+        chain_filter = [args.pdb_chain.strip().upper()] if args.pdb_chain else None
+        print(
+            f"Proteina {args.pdb}: orientamento + pdb2gmx "
+            f"(chain={chain_filter or 'tutte'})…"
+        )
+        prot_embed_manifest = embed_run(
+            pdb=args.pdb, out_dir=str(prot_dir),
+            chain_filter=chain_filter, prefer=args.pdb_prefer,
+            fix_missing=args.pdb_fix_missing,
+        )
+        if prot_embed_manifest["pdb2gmx_status"] != "ok":
+            print(
+                "ERRORE: pdb2gmx fallito per "
+                f"{args.pdb}:\n{prot_embed_manifest['pdb2gmx_log_tail'][-500:]}",
+                file=sys.stderr,
+            )
+            return 1
+
+        # itp generati da pdb2gmx (split per chain)
+        itp_rel: dict[str, str] = prot_embed_manifest["itp_files"]
+        itp_names: dict[str, str] = {}
+        posre_names: list[str] = []
+        for ch, fn in itp_rel.items():
+            src = prot_dir / fn
+            (system_dir / src.name).write_text(
+                clean_chain_itp(src.read_text())
+            )
+            itp_names[ch] = src.name
+        for posre_src in prot_dir.glob("posre*.itp"):
+            shutil.copy(str(posre_src), str(system_dir / posre_src.name))
+            posre_names.append(posre_src.name)
+
+        # carica netta reale della proteina (dalle sezioni [ atoms ] degli itp)
+        prot_net_charge = round(
+            sum(_itp_net_charge(prot_dir / fn) for fn in itp_rel.values()), 4
+        )
+        print(f"  carica proteica da itp: {prot_net_charge:+.1f} e")
+
+        # centraggio XY/Z e inserimento nel PDB del bilayer
+        gro_text = (prot_dir / "protein.gro").read_text()
+        centered = center_protein_gro(
+            gro_text,
+            prot_embed_manifest["tm_z_min_nm"],
+            prot_embed_manifest["tm_z_max_nm"],
+        )
+        (prot_dir / "protein_centered.gro").write_text(centered)
+        merged_pdb = merge_protein_into_pdb(pdb_path.read_text(), centered)
+        pdb_path.write_text(merged_pdb)
+
+        # topol: include itp proteici + righe [ molecules ]
+        top_text = top_path.read_text()
+        top_path.write_text(
+            patch_top_with_protein(top_text, itp_names, posre_names)
+        )
+
     # --- Esecuzione GROMACS opzionale ---
     gmx_run = False
     if args.run_gmx:
@@ -1632,6 +2109,8 @@ File:
                 gmx_path, system_dir, pdb_abs, top_abs, str(mdp_path.resolve()),
                 upper, lower, args.box_x, args.box_y, args.box_z,
                 args.ion_type, args.ion_conc,
+                protein_net_charge=prot_net_charge,
+                minimize=args.minimize, min_timeout=args.min_timeout,
             )
         else:
             print("AVVISO: --run-gmx richiesto ma gmx non trovato nel PATH.", file=sys.stderr)
@@ -1641,20 +2120,35 @@ File:
     for fname, content in equilib.items():
         (outdir / fname).write_text(content)
 
-    # --- Metriche fisiche dopo la build gmx ---
+    # --- Metriche fisiche: spessore P-P dal PDB grezzo + (se c'è) gro ---
     metrics = None
     ionized = system_dir / "ionized.gro"
-    if ionized.exists():
-        try:
-            metrics = compute_metrics(str(ionized), upper, lower)
-            (outdir / "metrics.json").write_text(
-                json.dumps(metrics, indent=2, ensure_ascii=False) + "\n"
-            )
-            print(f"  Metriche: spessore P-P {metrics['thickness_P_nm']} nm, "
-                  f"APL {metrics['apl_measured_nm2']} nm2, "
-                  f"acqua/lipide {metrics['water_per_lipid']}")
-        except Exception as exc:
-            print(f"AVVISO: metriche non calcolate: {exc}", file=sys.stderr)
+    try:
+        metrics = compute_metrics(
+            str(pdb_path), upper, lower,
+            gro_path=str(ionized) if ionized.exists() else None,
+            box_nm=(args.box_x, args.box_y, args.box_z),
+            extra_warnings=box_warnings,
+        )
+        if prot_embed_manifest is not None:
+            metrics["protein"] = {
+                "pdb_id": prot_embed_manifest["pdb_id"],
+                "source": prot_embed_manifest["source"],
+                "chains": prot_embed_manifest["chains"],
+                "net_charge_e": prot_net_charge,
+                "itp_files": prot_embed_manifest["itp_files"],
+                "fixed_residues": prot_embed_manifest["fixed_residues"],
+            }
+        (outdir / "metrics.json").write_text(
+            json.dumps(metrics, indent=2, ensure_ascii=False) + "\n"
+        )
+        print(f"  Metriche: spessore P-P {metrics['thickness_P_nm']} nm, "
+              f"APL {metrics['apl_measured_nm2']} nm2, "
+              f"acqua/lipide {metrics['water_per_lipid']}")
+        for w in metrics.get("warning", []):
+            print(f"  AVVISO metriche: {w}", file=sys.stderr)
+    except Exception as exc:
+        print(f"AVVISO: metriche non calcolate: {exc}", file=sys.stderr)
 
     # --- Manifest ---
     files = {

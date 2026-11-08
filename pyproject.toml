@@ -30,6 +30,9 @@ packages = ["src/cgui_studio"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "integration: test che richiede rete reale e gmx (skip automatico se mancanti).",
+]
 
 [tool.ruff]
 line-length = 100

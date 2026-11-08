@@ -12,7 +12,21 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from make_bilayer import generate_mdp, generate_pdb, generate_top, parse_lipid_text  # noqa: E402
+from make_bilayer import (  # noqa: E402
+    apl_for,
+    autobox_xy,
+    bilayer_thickness,
+    clean_chain_itp,
+    compute_metrics,
+    generate_mdp,
+    generate_pdb,
+    generate_top,
+    parse_lipid_text,
+    volume_for,
+)
+from make_bilayer import (
+    main as make_bilayer_main,
+)
 
 # ---------------------------------------------------------------------------
 # Parsing spec
@@ -133,3 +147,264 @@ def test_cli_generates_files(outdir: Path):
 
     # nome directory contiene la data ISO
     assert run_dir.name.startswith("20")
+
+
+# ---------------------------------------------------------------------------
+# Geometria verticale: spessore D_B dalla composizione
+# ---------------------------------------------------------------------------
+
+def test_thickness_popc_pure():
+    d = bilayer_thickness({"POPC": 64}, {"POPC": 64})
+    assert 3.70 <= d <= 3.85
+
+
+def test_thickness_popc_chol_70_30():
+    comp = {"POPC": 70, "CHOL": 30}
+    d = bilayer_thickness(comp, comp)
+    assert 3.90 <= d <= 4.25
+
+
+def test_thickness_psm_pure():
+    d = bilayer_thickness({"PSM": 64}, {"PSM": 64})
+    assert 4.55 <= d <= 4.80
+
+
+def test_thickness_popc_pope_50_50():
+    # POPE (V=1.19, APL=0.55) è più spesso del POPC per lipide: D_B sale
+    d = bilayer_thickness({"POPC": 50, "POPE": 50},
+                          {"POPC": 50, "POPE": 50})
+    assert 3.85 <= d <= 4.15
+
+
+def test_volume_sterol_alias():
+    # CHOL (alias da spec) e CHL1 (nome rtp CHARMM36) = stesso volume
+    assert volume_for("CHOL") == volume_for("CHL1") == 0.42
+
+
+# ---------------------------------------------------------------------------
+# P-P misurata dal PDB generato ≈ D_B prevista
+# ---------------------------------------------------------------------------
+
+def _rip_metrics(pdb_text: str, upper, lower, box=(8.0, 8.0, 12.0),
+                 tmp_path=None):
+    pdb_file = tmp_path / "sys.pdb"
+    pdb_file.write_text(pdb_text)
+    return compute_metrics(str(pdb_file), upper, lower, box_nm=box)
+
+
+def test_pp_measured_popc_pure(tmp_path: Path):
+    upper, lower = {"POPC": 64}, {"POPC": 64}
+    d_expected = bilayer_thickness(upper, lower)
+    pdb = generate_pdb(upper, lower, box_x=8.0, box_y=8.0)
+    m = _rip_metrics(pdb, upper, lower, tmp_path=tmp_path)
+    assert abs(m["thickness_P_nm"] - d_expected) <= 0.2
+    # il PDB è in nm: lo spessore deve essere ~3.8 nm, non valori in Å
+    assert 3.0 < m["thickness_P_nm"] < 4.5
+    assert m["n_phosphate_upper"] == 64
+    assert m["n_phosphate_lower"] == 64
+
+
+def test_pp_measured_popc_chol_mixed(tmp_path: Path):
+    upper, lower = {"POPC": 56, "CHOL": 24}, {"POPC": 56, "CHOL": 24}
+    d_expected = bilayer_thickness(upper, lower)
+    pdb = generate_pdb(upper, lower, box_x=8.0, box_y=8.0)
+    m = _rip_metrics(pdb, upper, lower, tmp_path=tmp_path)
+    assert abs(m["thickness_P_nm"] - d_expected) <= 0.2
+    # solo POPC ha P: CHOL non contribuisce ai fosfati
+    assert m["n_phosphate_upper"] == 56
+    assert m["n_phosphate_lower"] == 56
+
+
+# ---------------------------------------------------------------------------
+# Autobox
+# ---------------------------------------------------------------------------
+
+def test_autobox_popc64():
+    area = 64 * apl_for("POPC")
+    box = autobox_xy(area)
+    assert 6.9 <= box + 1e-9 <= 7.5
+
+
+def test_autobox_cli(tmp_path: Path):
+    outdir = tmp_path / "results"
+    rc = make_bilayer_main([
+        "--spec", "POPC=64", "--output", str(outdir),
+    ])
+    assert rc == 0
+    generated = [d for d in outdir.iterdir() if d.is_dir()]
+    metrics = json.loads(
+        (generated[0] / "metrics.json").read_text()
+    )
+    bx, by, bz = metrics["box_nm"]
+    assert 6.9 <= bx <= 7.5
+    assert 6.9 <= by <= 7.5
+    assert bz == 12.0
+
+
+# ---------------------------------------------------------------------------
+# compute_metrics: APL, acqua per lipide e warning
+# ---------------------------------------------------------------------------
+
+def _pdb_line(i, name, resname, x, y, z):
+    return (f"ATOM  {i:5d} {name:>4s} {resname:>4s}"
+            f"A{1:4d}    {x:8.3f}{y:8.3f}{z:8.3f}  "
+            f"1.00  0.00           {name[0]:>2s}")
+
+
+def _gro_text(n_sol, box=(6.4, 6.4, 7.0)):
+    lines = ["test", "???"]
+    rows = []
+    atom_i = 0
+    for sol in range(n_sol):
+        for aname in ("OW", "HW1", "HW2"):
+            atom_i += 1
+            rows.append(
+                f"{sol + 1:5d}{'SOL':<5s}{aname:<5s}{atom_i:5d}"
+                f"{0.0:8.3f}{0.0:8.3f}{1.000:8.3f}"
+            )
+    lines[1] = f"{atom_i:5d}"
+    lines += rows
+    lines.append("")
+    lines.append("")
+    lines.append(f"{box[0]:10.5f}{box[1]:10.5f}{box[2]:10.5f}")
+    return "\n".join(lines) + "\n"
+
+
+def test_metrics_apl_warning_and_water(tmp_path: Path):
+    # 4 POPC (2/foglio), box concordato col .gro 6.4x6.4
+    upper, lower = {"POPC": 2}, {"POPC": 2}
+    pdb_lines = []
+    i = 0
+    for z in (1.9, 1.9):
+        i += 1
+        pdb_lines.append(_pdb_line(i, "P", "POPC", 0.0, 0.0, z))
+    for z in (-1.9, -1.9):
+        i += 1
+        pdb_lines.append(_pdb_line(i, "P", "POPC", 0.0, 0.0, z))
+    pdb_lines.append("END")
+    pdb_file = tmp_path / "sys.pdb"
+    pdb_file.write_text("\n".join(pdb_lines) + "\n")
+    gro_file = tmp_path / "ionized.gro"
+    gro_file.write_text(_gro_text(n_sol=60))
+
+    m = compute_metrics(
+        str(pdb_file), upper, lower,
+        gro_path=str(gro_file), box_nm=(6.4, 6.4, 7.0),
+    )
+    assert m["thickness_P_nm"] == 3.8
+    assert m["n_phosphate_upper"] == 2
+    assert m["n_phosphate_lower"] == 2
+    # APL dal box / n lipidi PER FOGLIO (non dal conteggio atomi P)
+    assert m["apl_measured_nm2"] == 20.48
+    assert m["water_per_lipid"] == 15.0
+    assert m["apl_expected_nm2"] == 0.683
+    # 20.48 vs 0.683 -> deviazione > 15%: warning (non bloccante)
+    assert any("APL" in w for w in m["warning"])
+    assert not any("acqua" in w for w in m["warning"])
+
+
+def test_metrics_water_warning(tmp_path: Path):
+    upper, lower = {"POPC": 2}, {"POPC": 2}
+    pdb_lines = [
+        _pdb_line(1, "P", "POPC", 0.0, 0.0, 1.9),
+        _pdb_line(2, "P", "POPC", 0.0, 0.0, -1.9),
+    ]
+    pdb_lines.append("END")
+    pdb_file = tmp_path / "sys.pdb"
+    pdb_file.write_text("\n".join(pdb_lines) + "\n")
+    gro_file = tmp_path / "ionized.gro"
+    gro_file.write_text(_gro_text(n_sol=400))
+    m = compute_metrics(
+        str(pdb_file), upper, lower,
+        gro_path=str(gro_file), box_nm=(6.4, 6.4, 7.0),
+    )
+    assert m["water_per_lipid"] == 100.0
+    assert any("acqua" in w for w in m["warning"])
+
+
+def test_metrics_extra_warnings_passed_through(tmp_path: Path):
+    upper, lower = {"POPC": 2}, {"POPC": 2}
+    pdb_lines = [
+        _pdb_line(1, "P", "POPC", 0.0, 0.0, 1.9),
+        _pdb_line(2, "P", "POPC", 0.0, 0.0, -1.9),
+        "END",
+    ]
+    pdb_file = tmp_path / "sys.pdb"
+    pdb_file.write_text("\n".join(pdb_lines) + "\n")
+    m = compute_metrics(
+        str(pdb_file), upper, lower, box_nm=(6.4, 6.4, 7.0),
+        extra_warnings=["box troppo grande"],
+    )
+    assert "box troppo grande" in m["warning"]
+
+
+def test_cli_box_explicit_area_warning(tmp_path: Path):
+    # box 12x12 esplicito con POPC=10 (area 6.83 nm2 < 40% del box): warning
+    outdir = tmp_path / "results"
+    rc = make_bilayer_main([
+        "--spec", "POPC=10", "--box-x", "12", "--box-y", "12",
+        "--output", str(outdir),
+    ])
+    assert rc == 0
+    generated = [d for d in outdir.iterdir() if d.is_dir()]
+    metrics = json.loads((generated[0] / "metrics.json").read_text())
+    warnings_text = json.dumps(metrics["warning"])
+    assert "troppa acqua" in warnings_text
+
+
+# ---------------------------------------------------------------------------
+# clean_chain_itp: tail pdb2gmx rimosso, moleculetype intatto
+# ---------------------------------------------------------------------------
+
+def test_clean_chain_itp_cuts_after_posres_endif():
+    """Il tail (acqua assoluta + POSRES_WATER + fsys/molecules) va via."""
+    itp = (
+        "[ moleculetype ]\nProt 3\n\n[ atoms ]\n1 N 1\n"
+        "\n#ifdef POSRES\n#include \"posre.itp\"\n#endif\n"
+        "\n#include \"/home/x/.local/share/cgui-studio/charmm36.ff/tip3p.itp\"\n"
+        "\n#ifdef POSRES_WATER\n[ position_restraints ]\n1 1 1000 1000 1000\n#endif\n"
+        "\n[ system ]\nS\n\n[ molecules ]\nProt 1\n"
+    )
+    out = clean_chain_itp(itp)
+    assert "[ moleculetype ]" in out
+    assert "#ifdef POSRES" in out
+    assert "#include \"posre.itp\"" in out
+    assert "tip3p.itp" not in out
+    assert "POSRES_WATER" not in out
+    assert "[ molecules ]" not in out
+
+
+def test_clean_chain_itp_cuts_at_absolute_tip3p_when_no_posres():
+    itp = (
+        "[ moleculetype ]\nProt 3\n\n[ atoms ]\n1 N 1\n"
+        "\n#include \"/home/x/charmm36.ff/tip3p.itp\"\n[ molecules ]\nProt 1\n"
+    )
+    out = clean_chain_itp(itp)
+    assert "[ moleculetype ]" in out
+    assert "tip3p.itp" not in out
+    assert "[ molecules ]" not in out
+
+
+def test_clean_chain_itp_intact_without_tail():
+    itp = "[ moleculetype ]\nProt 3\n\n[ atoms ]\n1 N 1\n"
+    assert clean_chain_itp(itp) == itp
+
+
+def test_clean_chain_itp_real_pdb2gmx_file():
+    """Sul file reale del benchmark: le sezioni moleculetype restano intatte."""
+    candidates = [
+        Path("results/2026-11-08_benchmark_gpbar1/topol_ProteinChainR.itp"),
+        Path("/tmp/opencode/embed_fix_test/topol_ProteinChainR.itp"),
+    ]
+    real = next((p for p in candidates if p.exists()), None)
+    if real is None:
+        pytest.skip("file benchmark non presente")
+    out = clean_chain_itp(real.read_text())
+    # tutte le sezioni fino a cmap restano
+    for sect in ("[ atoms ]", "[ bonds ]", "[ angles ]", "[ dihedrals ]", "[ cmap ]"):
+        assert sect in out
+    # niente acqua relativa/assoluta, niente POSRES_WATER
+    assert "tip3p.itp" not in out
+    assert "POSRES_WATER" not in out
+    # la definizione posres relativa resta (risolta dalla copia in system/)
+    assert "#include \"posre.itp\"" in out
