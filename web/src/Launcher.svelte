@@ -3,7 +3,7 @@
 
   const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy } = $props();
 
-  const COMMON = new Set(["POPC","CHOL","POPE","DPPC","DSPC","DOPS","DOTAP","SM","DOPC","DOPE","DMPC","DLPC","DPPS","POPS","POPA","POPG","POPI"]);
+  const COMMON = new Set(["POPC","CHOL","CHL1","POPE","DPPC","DSPC","DOPS","DOTAP","SM","PSM","DOPC","DOPE","DMPC","DLPC","DPPS","POPS","POPA","POPG","POPI"]);
   const TYPE_COLORS = { lipid: "#3b82f6", protein: "#ef4444", dna: "#10b981", rna: "#8b5cf6", "small-mol": "#f59e0b" };
 
   const CAT_COLORS = { PC: "#3b82f6", PE: "#10b981", PS: "#ec4899", PA: "#f59e0b", PG: "#8b5cf6", "PI / Fosfoinositidi": "#06b6d4", Cardiolipine: "#dc2626", Steroli: "#ef4444", Sfingolipidi: "#14b8a6", Ceramidi: "#a855f7", "Acidi grassi": "#84cc16", Detergenti: "#78716c", Altri: "#a1a1aa" };
@@ -39,7 +39,13 @@
   function pickedList(side) { const c = side === "lower" && !symmetric ? lowerCounts : upperCounts; return Object.entries(c).filter(([, v]) => v > 0); }
   function pick(id) { if (countOf(id) === 0) add(id); }
   function totalCounts(c) { return Object.values(c).reduce((s, v) => s + v, 0); }
-  function specString(c) { return Object.entries(c).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(";"); }
+  const ALIAS_LIPID = { CHOL: "CHL1" };
+  function specString(c) {
+    return Object.entries(c)
+      .filter(([, v]) => v > 0)
+      .map(([k, v]) => `${ALIAS_LIPID[k] ?? k}=${v}`)
+      .join(";");
+  }
   function filtered() { const q = search.trim().toUpperCase(); let list = LIPID_CATALOG; if (catFilter) list = list.filter(l => l.cat === catFilter); if (q) list = list.filter(l => l.id.includes(q)); else if (!catFilter) list = list.filter(l => COMMON.has(l.id)); return list.slice(0, 90); }
   function filteredTotal() { const q = search.trim().toUpperCase(); let list = LIPID_CATALOG; if (catFilter) list = list.filter(l => l.cat === catFilter); if (q) list = list.filter(l => l.id.includes(q)); else if (!catFilter) list = list.filter(l => COMMON.has(l.id)); return list.length; }
   const hasSearchOrFilter = $derived(!!search.trim() || !!catFilter);
