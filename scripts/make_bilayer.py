@@ -128,9 +128,10 @@ def autobox_xy(area_demanded: float) -> float:
 
     Il margine tenue mantiene la APL misurata entro il 15% dall'attesa
     (soglia del warning APL) invece del pad generoso (+1.2 nm) che
-    gonfiava l'acqua per lipide.
+    gonfiava l'acqua per lipide. Minimo 2.6 nm: con PBC il lato deve
+    superare il doppio del cut-off (~1.2 nm) o grompp rifiuta.
     """
-    return round(math.sqrt(max(area_demanded, 1e-6)), 1) + 0.3
+    return max(round(math.sqrt(max(area_demanded, 1e-6)), 1) + 0.3, 2.6)
 
 
 def apl_for(name: str) -> float:
@@ -282,31 +283,37 @@ def parse_spec(spec: str | None) -> dict[str, int]:
 # Generatore posizioni lipidi
 # ---------------------------------------------------------------------------
 
-def _circle_positions(n: int, radius: float) -> list[tuple[float, float]]:
-    """Distribuisce n punti su un cerchio di raggio `radius` nel piano xy."""
+def _lattice_positions(
+    n: int, box_x: float, box_y: float, jitter: float, seed: int = 42,
+) -> list[tuple[float, float]]:
+    """Distribuisce n punti su griglia rettangolare che riempie il box xy.
+
+    Il rettangolo utile è il box meno un margine 0.15 nm per lato (la metà
+    del margine +0.3 dell'autobox, così l'APL misurata resta nell'attesa).
+    jitter=0 -> griglia regolare (layout planar); jitter>0 disordine
+    laterale (layout fluid), ampiezza limitata a metà passo di griglia.
+    """
     if n <= 0:
         return []
-    return [
-        (radius * math.cos(2 * math.pi * i / n),
-         radius * math.sin(2 * math.pi * i / n))
-        for i in range(n)
-    ]
-
-
-def _random_positions(n: int, radius: float, seed: int = 42) -> list[tuple[float, float]]:
-    """Distribuisce n punti in modo casuale (mosaico fluido) nel piano xy."""
-    if n <= 0:
-        return []
+    margin = min(0.15, box_x / 6.0, box_y / 6.0)
+    span_x = max(box_x - 2 * margin, 0.05)
+    span_y = max(box_y - 2 * margin, 0.05)
+    cols = max(1, round(math.sqrt(n * span_x / span_y)))
+    rows = math.ceil(n / cols)
+    dx = span_x / cols if cols > 1 else 0.0
+    dy = span_y / rows if rows > 1 else 0.0
     rng = random.Random(seed)
-    positions: list[tuple[float, float]] = []
-    attempts = 0
-    max_attempts = n * 100
-    while len(positions) < n and attempts < max_attempts:
-        attempts += 1
-        r = radius * math.sqrt(rng.random())
-        theta = rng.random() * 2 * math.pi
-        positions.append((r * math.cos(theta), r * math.sin(theta)))
-    return positions
+    amps = [min(jitter * dx, dx / 3.0), min(jitter * dy, dy / 3.0)]
+    pts: list[tuple[float, float]] = []
+    for i in range(n):
+        c, r = i % cols, i // cols
+        px = -span_x / 2 + (c + 0.5) * dx
+        py = -span_y / 2 + (r + 0.5) * dy
+        if amps[0] > 1e-9 or amps[1] > 1e-9:
+            px += rng.uniform(-1, 1) * amps[0]
+            py += rng.uniform(-1, 1) * amps[1]
+        pts.append((px, py))
+    return pts
 
 
 def _sterane_offsets() -> dict[str, tuple[float, float]]:
@@ -438,6 +445,78 @@ def _sterol_atom_lines(
     return lines
 
 
+def _classify_atoms(
+    atoms_info: list[tuple[str, str, float, int]],
+    bonds: list[tuple[str, str]],
+) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Classifica gli atomi di un lipide dal GRAFO dei legami rtp.
+
+    Le categorie guidano il posizionamento: N/P (anchor testa),
+    O_head (O legata a P o N: fosfato/testa polare), O_ester (O legata
+    solo a C: segue la catena), anchor (C agganciato a O_head:
+    glicerolo/zucchero), ring (ciclo chiuso di carboni, es. inositolo),
+    tail (C idrocarburico o acilico, scende verso il centro),
+    H (segue il partner pesante).
+    """
+    nbrs: dict[str, list[str]] = {}
+    for a, b in bonds:
+        nbrs.setdefault(a, []).append(b)
+        nbrs.setdefault(b, []).append(a)
+
+    cat: dict[str, str] = {}
+    for name, _atype, _charge, _group in atoms_info:
+        c0 = name[0]
+        if c0 == "H":
+            cat[name] = "H"
+        elif name == "P":
+            cat[name] = "P"
+        elif c0 == "N":
+            cat[name] = "N"
+        elif c0 == "O":
+            cat[name] = "O_head"
+        elif c0 == "C":
+            cat[name] = "tail"
+        else:
+            cat[name] = "other"
+
+    head_o: set[str] = set()
+    for name, c in list(cat.items()):
+        if c == "O_head":
+            if any(p == "P" or p[0] == "N" for p in nbrs.get(name, [])):
+                head_o.add(name)
+            else:
+                cat[name] = "O_ester"
+
+    carbons = {n for n, c in cat.items() if c == "tail"}
+    anchor_c = {c for c in carbons if any(p in head_o for p in nbrs.get(c, []))}
+    chain_c = carbons - anchor_c
+
+    # cicli chiusi di carboni (>=4 membri) tra chain/anchor -> testata
+    ring_c: set[str] = set()
+    for start in sorted(chain_c | anchor_c):
+        stack: list[tuple[str, tuple[str, ...]]] = [(start, (start,))]
+        while stack:
+            cur, path = stack.pop()
+            prev = path[-2] if len(path) > 1 else None
+            for p in nbrs.get(cur, []):
+                if p not in chain_c and p not in anchor_c:
+                    continue
+                if p == prev:
+                    continue
+                if p in path:
+                    cycle = path[path.index(p):]
+                    if len(cycle) >= 4:
+                        ring_c.update(cycle)
+                    continue
+                stack.append((p, path + (p,)))
+
+    for name in ring_c:
+        cat[name] = "ring"
+    for name in anchor_c - ring_c:
+        cat[name] = "anchor"
+    return cat, nbrs
+
+
 def _lipid_atom_lines(
     resname: str,
     resno: int,
@@ -447,14 +526,15 @@ def _lipid_atom_lines(
     chain_id: str = "A",
     mirror: bool = False,
 ) -> list[str]:
-    """Genera righe ATOM per un singolo lipide usando nomi atomi CHARMM36 reali
-    da lipid.rtp.
+    """Righe PDB per un lipide con geometria dal grafo dei legami rtp.
 
-    Le coordinate sono generate geometricamente (testa in alto, code verso il
-    centro) con lunghezze di legame realistiche. I nomi degli atomi corrispondono
-    esattamente a quelli definiti in lipid.rtp. Con mirror=True le coordinate z
-    vengono negate alla scrittura: il foglio inferiore è il vero specchio del
-    superiore (teste polari simmetriche, code convergenti verso il centro).
+    Testa polare (P/N/O) intorno a z_head, glicerolo/ancore zucchero
+    sotto l'O di testa, catene aciliche che scendono verso il centro
+    (z -> TAIL_END_Z) con inclinazione realistica e lunghezze di legame
+    C-C esatte (0.154 nm: con z-step ridotto la catena si piega
+    lateralmente, non si comprime). I cicli chiusi (inositolo) restano
+    piatti vicino alla testa. Con mirror=True le z sono negate alla
+    scrittura (foglio inferiore = specchio del superiore).
     """
     lines: list[str] = []
 
@@ -462,10 +542,10 @@ def _lipid_atom_lines(
     residue = LIPID_RTP_DATA.get(rtp_name)
 
     if residue is None:
-        # Residuo non in lipid.rtp: genera atomi generici con nomi semplici
+        # Residuo non in lipid.rtp: atomi generici con nomi semplici
         n_atoms = LIPID_ATOMS.get(resname, 15)
         for i in range(n_atoms):
-            atom_name = f"C{i+1}" if i > 0 else "C1"
+            atom_name = f"C{i+1}"
             lines.append(
                 f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
                 f"{chain_id:1s}{resno:4d}    {x:8.3f}{y:8.3f}"
@@ -474,7 +554,7 @@ def _lipid_atom_lines(
             )
         return lines
 
-    atoms_info = residue["atoms"]  # lista di (name, type, charge, group)
+    atoms_info = residue["atoms"]
 
     # steroli: backbone steran dedicato (anelli fused, non catene)
     if rtp_name in STEROL_RESIDUES:
@@ -483,135 +563,246 @@ def _lipid_atom_lines(
             resno, x, y, z_head, chain_id, mirror,
         )
 
-    # Costanti geometriche (nm)
-    BOND_CC = 0.154
-    BOND_CO = 0.143
-    BOND_CN = 0.147
-    BOND_PO = 0.148
-    TETRA_RAD = math.radians(112.0)  # angolo C-C-C negli alcani
-    TAIL_TILT = 0.3  # inclinazione delle code verso il centro (rad)
-
-    # Classifica gli atomi per categoria
-    head_names: list[str] = []   # N, P, O* (testa polare)
-    glycerol_names: list[str] = []  # C1, C2, C3 (glicerolo)
-    tail1_names: list[str] = []  # C21-C218 (catena sn-1)
-    tail2_names: list[str] = []  # C31-C316 (catena sn-2)
-    h_names: list[str] = []      # H* (idrogeni)
-
-    for name, _atype, _charge, _group in atoms_info:
-        if name in ("N3", "N") or name == "P" or (
-            name.startswith("O") and name not in ("O21", "O31", "O22", "O32")
-        ):
-            head_names.append(name)
-        elif name in ("C1", "C2", "C3"):
-            glycerol_names.append(name)
-        elif name.startswith("C2") and len(name) > 2:
-            tail1_names.append(name)
-        elif name.startswith("C3") and len(name) > 2:
-            tail2_names.append(name)
-        elif name.startswith("H"):
-            h_names.append(name)
-        else:
-            tail1_names.append(name)
+    cat, nbrs = _classify_atoms(atoms_info, residue.get("bonds", []))
 
     coords: dict[str, tuple[float, float, float]] = {}
 
-    # --- Testa polare ---
-    idx = 0
-    for name in head_names:
-        if name in ("N3", "N"):
-            coords[name] = (x, y, z_head)
-        elif name == "P":
-            coords[name] = (x, y, z_head - BOND_CN)
-        elif name.startswith("O"):
-            angle = idx * 2 * math.pi / max(len(head_names), 1)
-            coords[name] = (
-                x + BOND_PO * math.cos(angle),
-                y + BOND_PO * math.sin(angle),
-                z_head - BOND_CN,
+    # --- Ancore testa: N sopra, P subito sotto (P cade a z_head-BOND_CN) ---
+    z_p = z_head - BOND_CN
+    n_names = [n for n, c in cat.items() if c == "N"]
+    for k, nname in enumerate(n_names):
+        coords[nname] = (x, y, z_head - 0.01 * k)
+    for pname in [n for n, c in cat.items() if c == "P"]:
+        coords[pname] = (x, y, z_p)
+
+    # --- O di testa: anello attorno al P ---
+    head_o_list = [n for n, c in cat.items() if c == "O_head"]
+    for k, oname in enumerate(head_o_list):
+        az = 2 * math.pi * k / max(len(head_o_list), 1) + 0.4
+        dz = 0.05 if k % 2 == 0 else -0.05
+        coords[oname] = (
+            x + BOND_PO * math.cos(az),
+            y + BOND_PO * math.sin(az),
+            z_p + dz,
+        )
+
+    # --- Catena da N (colina/ammine): BFS via soli C, si allarga attorno a N ---
+    chain_extra_starts: set[str] = set()
+
+    def _subtree_size_c(atom: str, stop: set[str]) -> int:
+        """Numero di C nel sottoalbero carbonioso da `atom` (esclude O/P/N)."""
+        seen: set[str] = {atom}
+        stack = [atom]
+        while stack:
+            cur = stack.pop()
+            for p in nbrs.get(cur, []):
+                if p in stop or p in seen or p[0] != "C":
+                    continue
+                seen.add(p)
+                stack.append(p)
+        return len(seen)
+
+    n_root_seen: set[str] = set()
+
+    def _bfs_n_chain(n_root: str | None) -> None:
+        if n_root is None:
+            return
+        slot = [0]
+        queue: list[tuple[str, int]] = [(n_root, 0)]
+        n_root_seen.add(n_root)
+        while queue:
+            cur, lvl = queue.pop(0)
+            cx, cy, cz = coords[cur]
+            kids = [
+                p for p in nbrs.get(cur, [])
+                if p[0] == "C" and p not in n_root_seen and p not in coords
+                and cat.get(p) != "ring"
+            ]
+            for p in sorted(kids):
+                n_root_seen.add(p)
+                subtree = _subtree_size_c(p, set(nbrs.get(cur, [])))
+                if lvl > 0 and subtree > 6:
+                    # ramo carbonioso lungo attaccato all'N (es. sfingosina):
+                    # NON sale vicino alla testa, diventa catena che scende
+                    chain_extra_starts.add(p)
+                    continue
+                if lvl == 0:
+                    az = 2 * math.pi * slot[0] / 4
+                    coords[p] = (
+                        cx + BOND_CN * math.cos(az),
+                        cy + BOND_CN * math.sin(az),
+                        cz + 0.02,
+                    )
+                else:
+                    az = 0.7 * lvl
+                    coords[p] = (
+                        cx + BOND_CC * math.cos(az),
+                        cy + BOND_CC * math.sin(az),
+                        cz + 0.05,
+                    )
+                slot[0] += 1
+                queue.append((p, lvl + 1))
+
+    coords2 = set(coords)  # atomi gia' piazzati (anchor testa)
+
+    # --- Catene da O_head verso il basso (glicerolo/acyl) ---
+    visited: set[str] = set()
+
+    def _depth_remaining(atom: str, memo: dict[str, int]) -> int:
+        """Lunghezza del percorso piu' lungo verso una foglia (C/O ester)."""
+        if atom in memo:
+            return memo[atom]
+        memo[atom] = 1  # guard contro cicli
+        best = 0
+        for p in nbrs.get(atom, []):
+            if p in visited or cat.get(p) not in ("tail", "O_ester", "anchor"):
+                continue
+            best = max(best, _depth_remaining(p, memo))
+        memo[atom] = 1 + best
+        return memo[atom]
+
+    counter = {"chain_step": 0}
+
+    def _place(atom: str, parent: str) -> None:
+        px, py, pz = coords[parent]
+        a_is_ester = cat.get(atom) == "O_ester"
+        h_par = [p for p in nbrs.get(atom, [])
+                 if p[0] in ("C", "P", "N") and p != parent]
+        if a_is_ester and not [p for p in h_par if p in coords]:
+            # O disossolo: tenue offset dal partner verso il centro
+            counter["chain_step"] += 1
+            az = 0.6 * counter["chain_step"]
+            coords[atom] = (px + 0.10 * math.cos(az), py + 0.10 * math.sin(az), pz - 0.06)
+            return
+        if a_is_ester and [p for p in nbrs.get(atom, []) if p[0] == "C" and p not in visited]:
+            # O ponte (ester): tra parent e il C da esplorare
+            nxt = [p for p in nbrs.get(atom, [])
+                   if p[0] == "C" and p not in visited][0]
+            memo: dict[str, int] = {}
+            depth = _depth_remaining(nxt, memo)
+            counter["chain_step"] += 1
+            az = 0.6 * counter["chain_step"]
+            coords[atom] = (
+                px + 0.10 * math.cos(az),
+                py + 0.10 * math.sin(az),
+                pz - dz_step_for(depth, pz),
             )
-            idx += 1
-
-    # --- Glicerolo ---
-    if "C1" in glycerol_names:
-        coords["C1"] = (x, y + BOND_CO, z_head - BOND_CN - BOND_PO)
-    if "C2" in glycerol_names:
-        coords["C2"] = (
-            x,
-            y + BOND_CO + BOND_CC * 0.5,
-            z_head - BOND_CN - BOND_PO - BOND_CC * 0.5,
-        )
-    if "C3" in glycerol_names:
-        coords["C3"] = (
-            x,
-            y + BOND_CO + BOND_CC,
-            z_head - BOND_CN - BOND_PO - BOND_CC,
-        )
-
-    # --- Catena sn-1 (da C2: C21-C218) ---
-    cur = coords.get("C2", coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO)))
-    cur_x, cur_y, cur_z = cur
-    # direzione code: verso il centro del bilayer (giù per il foglio
-    # superiore con z_head>0, su per il foglio inferiore passato con z_head<0)
-    flip_z = 1.0 if z_head > 0 else -1.0
-    dir_x, dir_y, dir_z = math.sin(TAIL_TILT), 0.0, -flip_z * math.cos(TAIL_TILT)
-    tail1_c_names = [n for n in tail1_names if n.startswith("C")]
-    for j, name in enumerate(tail1_c_names):
-        cur_x += dir_x * BOND_CC
-        cur_y += dir_y * BOND_CC
-        cur_z += dir_z * BOND_CC
-        rot = TETRA_RAD * 0.2 * (0.5 - (j % 3) / 3.0)
-        nx = cur_x + dir_x * math.cos(rot) - dir_y * math.sin(rot)
-        ny = cur_y + dir_x * math.sin(rot) + dir_y * math.cos(rot)
-        cur_x, cur_y = nx, ny
-        target_z = TAIL_END_Z if z_head > 0 else -TAIL_END_Z
-        if (z_head > 0 and cur_z < target_z) or (z_head < 0 and cur_z > target_z):
-            cur_z = target_z
-        coords[name] = (cur_x, cur_y, cur_z)
-
-    # --- Catena sn-2 (da C3: C31-C316) ---
-    tail2_c_names = [n for n in tail2_names if n.startswith("C")]
-    cur = coords.get("C3", coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO - BOND_CC)))
-    cur_x, cur_y, cur_z = cur
-    dir_x = math.sin(TAIL_TILT) * math.cos(math.pi / 4)
-    dir_y = math.sin(TAIL_TILT) * math.sin(math.pi / 4)
-    dir_z = -flip_z * math.cos(TAIL_TILT)
-    for j, name in enumerate(tail2_c_names):
-        cur_x += dir_x * BOND_CC
-        cur_y += dir_y * BOND_CC
-        cur_z += dir_z * BOND_CC
-        rot = TETRA_RAD * 0.2 * (0.5 - (j % 3) / 3.0)
-        nx = cur_x + dir_x * math.cos(rot) - dir_y * math.sin(rot)
-        ny = cur_y + dir_x * math.sin(rot) + dir_y * math.cos(rot)
-        cur_x, cur_y = nx, ny
-        target_z = TAIL_END_Z if z_head > 0 else -TAIL_END_Z
-        if (z_head > 0 and cur_z < target_z) or (z_head < 0 and cur_z > target_z):
-            cur_z = target_z
-        coords[name] = (cur_x, cur_y, cur_z)
-
-    # --- Atomi di idrogeno: vicino al carbonio padre ---
-    for name in h_names:
-        parent_name = name[1:]
-        if parent_name in coords:
-            px, py, pz = coords[parent_name]
-        elif tail1_c_names:
-            px, py, pz = coords[tail1_c_names[-1]]
-        elif tail2_c_names:
-            px, py, pz = coords[tail2_c_names[-1]]
         else:
-            px, py, pz = coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO))
-        coords[name] = (px + 0.05, py + 0.05, pz + 0.05)
+            # C di catena: z-step uniforme, laterale complessivo da legame
+            memo2: dict[str, int] = {}
+            depth = _depth_remaining(atom, memo2)
+            counter["chain_step"] += 1
+            dz = dz_step_for(depth, pz)
+            lateral = math.sqrt(max(BOND_CC ** 2 - dz ** 2, 0.02 ** 2))
+            az = 0.6 * counter["chain_step"] * (1 if counter["chain_step"] % 2 else -1)
+            coords[atom] = (
+                px + lateral * math.cos(az),
+                py + lateral * math.sin(az),
+                pz - dz,
+            )
 
-    # --- Scrive righe PDB nell'ordine degli atomi in lipid.rtp ---
+    def dz_step_for(depth: int, pz: float) -> float:
+        span = abs(pz - TAIL_END_Z)
+        return min(max(span / max(depth, 1), 0.058), 0.148)
+
+    def _bfs_chains() -> None:
+        starts: set[str] = chain_extra_starts
+        for oname in head_o_list:
+            for p in nbrs.get(oname, []):
+                if (
+                    p not in visited
+                    and p not in coords
+                    and cat.get(p) in ("tail", "O_ester", "anchor")
+                ):
+                    starts.add(p)
+        if not starts:
+            return
+        for s in sorted(starts):
+            _seed_down(s)
+
+    def _seed_down(start: str) -> None:
+        if start in visited:
+            return
+        # gli anchor (glicerolo/zucchero) scendono dal proprio O_head
+        if start in coords:
+            visited.add(start)
+            pass
+        else:
+            parent = [p for p in nbrs.get(start, []) if p in coords]
+            if parent:
+                px, py, pz = coords[parent[0]]
+                visited.add(start)
+                coords[start] = (px + 0.03, py + 0.07, pz - 0.13)
+            else:
+                visited.add(start)
+                coords[start] = (x + 0.02, y + 0.10, z_p - 0.18)
+        queue = [start]
+        while queue:
+            cur = queue.pop(0)
+            nxt = [
+                p for p in nbrs.get(cur, [])
+                if p not in visited and p not in coords2
+                and cat.get(p) in ("tail", "O_ester")
+            ]
+            for p in sorted(nxt):
+                visited.add(p)
+                _place(p, cur)
+                queue.append(p)
+
+    _bfs_n_chain(n_names[0] if n_names else None)
+
+    # --- Anello (inositolo): esagono piatto vicino alla testa ---
+    ring_atoms = sorted(n for n, c in cat.items() if c == "ring")
+    if ring_atoms:
+        rcx, rcy, rcz = x + 0.05, y + 0.42, z_p - 0.10
+        for k, rname in enumerate(ring_atoms):
+            az = 2 * math.pi * k / max(len(ring_atoms), 1)
+            coords[rname] = (
+                rcx + 0.24 * math.cos(az),
+                rcy + 0.24 * math.sin(az),
+                rcz + 0.03 * (1 if k % 2 else -1),
+            )
+            visited.add(rname)
+
+    # ancore non ancora piazzate (zucchero non raggiunto dalla BFS N)
+    for aname in sorted(n for n, c in cat.items() if c == "anchor"):
+        if aname in coords:
+            continue
+        parents = [p for p in nbrs.get(aname, []) if p in coords]
+        if parents:
+            px, py, pz = coords[parents[0]]
+            coords[aname] = (px + 0.03, py + 0.07, pz - 0.13)
+        else:
+            coords[aname] = (x + 0.02, y + 0.10, z_p - 0.18)
+        visited.add(aname)
+
+    _bfs_chains()
+
+    # --- Idrogeni: vicino al partner pesante (dal grafo) ---
+    h_idx = 0
+    for name, catg in cat.items():
+        if catg != "H" or name in coords:
+            continue
+        parents = [p for p in nbrs.get(name, []) if p in coords]
+        if parents:
+            px, py, pz = coords[parents[0]]
+            wob = 0.05 if h_idx % 2 == 0 else -0.04
+            h_idx += 1
+            coords[name] = (px + 0.05, py + 0.04, pz + wob)
+        else:
+            coords[name] = (x + 0.05, y + 0.05, z_head)
+
+    # --- Scrittura nell'ordine rtp ---
+    missing = 0
     for name, _atype, _charge, _group in atoms_info:
         if name not in coords:
-            # Atomo senza coordinate: posiziona vicino a C1 come fallback
-            cx, cy, cz = coords.get("C1", (x, y, z_head - BOND_CN - BOND_PO))
-            coords[name] = (cx + 0.05, cy + 0.05, cz + 0.05)
+            missing += 1
+            coords[name] = (x + 0.03 * missing,
+                            y + 0.03 * missing, z_head * 0.5)
         ox, oy, oz = coords[name]
         if mirror:
             oz = -oz
-        elem = name[0]  # primo carattere come elemento (approssimativo)
+        elem = name[0]
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
             f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
@@ -663,15 +854,14 @@ def generate_pdb(
         return sum(c * apl_for(n) for n, c in d.items())
     area_upper = _sheet_area(upper)
     area_lower = _sheet_area(lower)
-    sheet_radius = math.sqrt(max(area_upper, area_lower) / math.pi) * 1.15
+    if area_upper <= 0 or area_lower <= 0:
+        raise ValueError("foglio vuoto (upper o lower senza lipidi): area membrana zero")
 
-    # scegli generatore posizioni
-    if layout == "fluid":
-        upper_positions = _random_positions(sum(upper.values()), sheet_radius * 0.8)
-        lower_positions = _random_positions(sum(lower.values()), sheet_radius * 0.8, seed=7)
-    else:
-        upper_positions = _circle_positions(sum(upper.values()), sheet_radius * 0.8)
-        lower_positions = _circle_positions(sum(lower.values()), sheet_radius * 0.8)
+    # posizioni su griglia che riempie il box (l'APL reale la fissa il box,
+    # non la composizione: i lipidi si distribuiscono su tutta l'area)
+    jitter = 0.30 if layout == "fluid" else 0.0
+    upper_positions = _lattice_positions(sum(upper.values()), box_x, box_y, jitter, seed=42)
+    lower_positions = _lattice_positions(sum(lower.values()), box_x, box_y, jitter, seed=7)
 
     # lista di specie per leaflet: assegnazione CASUALE specie<->posizione
     # (mescolamento laterale reale: nelle membrane le specie sono distribuite

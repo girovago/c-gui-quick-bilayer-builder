@@ -7,7 +7,7 @@
   import SpecSketch from "./SpecSketch.svelte";
   import BatchPanel from "./BatchPanel.svelte";
   import Launcher from "./Launcher.svelte";
-  import { api, formToPayload, isFormValid, parseLipidText, lipidRe } from "./api.js";
+  import { api, authGet, authLogin, authLogout, formToPayload, isFormValid, parseLipidText, lipidRe } from "./api.js";
 
   // ------------------------------------------------------------------ form state
   const blankForm = () => ({
@@ -44,6 +44,38 @@
   let mockMode = $state(false);
   let panel = $state("single"); // "single" | "batch" — i pannelli restano MONTATI (hidden):
   // cambiare tab non distrugge la coda batch (che vive in-session)
+
+  let auth = $state({ logged: false, mode: "none", email: null, ts: null });
+  let loginErr = $state(null);
+  let loginOpen = $state(false);
+  let loginBusy = $state(false);
+  let loginData = $state({ email: "", password: "" });
+
+  async function loadAuth() {
+    try { auth = await authGet(); } catch { auth = { logged: false, mode: "none" }; }
+  }
+
+  async function doLogin(e) {
+    e.preventDefault();
+    loginErr = null; loginBusy = true;
+    try {
+      const res = await authLogin(loginData.email, loginData.password);
+      loginOpen = false;
+      loginData = { email: "", password: "" };
+      await loadAuth();
+      flash("ok", `Login CHARMM-GUI: ${res.email} (token solo in RAM, non salvato su disco)`);
+    } catch (e) {
+      loginErr = e.message;
+    } finally {
+      loginBusy = false;
+    }
+  }
+
+  async function doLogout() {
+    try { await authLogout(); } catch {}
+    auth = { logged: false, mode: "none", email: null, ts: null };
+    flash("ok", "Sessione CHARMM-GUI chiusa");
+  }
 
   // Nuovi parametri del launcher (proteine, acidi nucleici, small molecules)
   let buildType = $state("lipid"); // "lipid" | "protein" | "dna" | "rna" | "small-mol"
@@ -225,7 +257,11 @@
       detail = null;
       await refreshJobs();
     } catch (e) {
-      flash("err", e.message);
+      if (e.status === 409 && !auth.logged) {
+        flash("err", "Login CHARMM-GUI richiesto: clicca Login CHARMM-GUI in alto (o `cgui login` da CLI).");
+      } else {
+        flash("err", e.message);
+      }
     } finally {
       busy = false;
     }
@@ -354,6 +390,7 @@
     document.addEventListener("visibilitychange", onVisibility);
     scheduleJobs();
     scheduleDetail();
+    loadAuth(); // stato sessione CHARMM-GUI (RAM o disco-cache CLI)
     return () => {
       clearTimeout(detailTimer);
       clearTimeout(jobsTimer);
@@ -370,7 +407,47 @@
     <span class="rounded-full border border-cyan-300 px-2 py-0.5 text-xs text-cyan-700" title="CGUI_MOCK=1: nessuna chiamata reale a charmm-gui.org">
       {mockMode ? "MOCK" : "API reale"}
     </span>
+    {#if mockMode}
+      <span class="rounded-full border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 bg-zinc-100">
+        Auth non richiesta
+      </span>
+    {:else}
+      <button type="button" class="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium transition-all {auth.logged ? 'bg-cyan-600 text-white border-cyan-500 hover:bg-cyan-700' : 'bg-white text-zinc-700 hover:bg-zinc-100'}" onclick={() => (loginOpen = true)} title="Login CHARMM-GUI (token solo in RAM del server, niente credenziali su disco)">
+        {auth.logged ? `Logout · ${auth.email}` : "Login CHARMM-GUI"}
+      </button>
+      {#if auth.logged}
+        <span class="rounded-full border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 bg-zinc-100" title="Il token è solo in RAM: riavviando il server va rifatto il login">
+          sessione attiva
+        </span>
+      {/if}
+    {/if}
   </header>
+
+  {#if loginOpen}
+    <div class="fixed inset-0 z-[60] flex items-center justify-center" aria-hidden="true">
+      <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick={() => (loginOpen = false)} />
+      <div class="bg-white rounded-2xl border border-zinc-200 p-6 shadow-2xl w-full max-w-xs mx-4">
+        <h2 class="mb-4 text-lg font-semibold text-zinc-900">Login CHARMM-GUI</h2>
+        <p class="mb-4 text-xs text-zinc-500 leading-relaxed">Inserisci email e password di CHARMM-GUI. <b>Non salvamo nulla su disco</b>: il token resta solo in RAM del server locale e svanisce al riavvio o al logout.</p>
+        <form onsubmit={doLogin}>
+          <div class="space-y-3 mb-4">
+            <label class="block text-xs font-medium text-zinc-700">Email</label>
+            <input type="email" bind:value={loginData.email} placeholder="nome@istituto.it" class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
+            <label class="block text-xs font-medium text-zinc-700">Password</label>
+            <input type="password" bind:value={loginData.password} class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
+          </div>
+          <div class="flex gap-3">
+            <button type="button" class="flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100" onclick={() => (loginOpen = false)}>Annulla</button>
+            <button type="submit" disabled={loginBusy} class="flex-1 rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white font-medium hover:bg-cyan-700 disabled:opacity-60">{loginBusy ? "Accesso…" : "Accedi"}</button>
+          </div>
+          {#if loginErr}
+            <div class="mt-3 text-[11px] text-red-600 bg-red-50/40 rounded p-2">{loginErr}</div>
+          {/if}
+        </form>
+        <p class="mt-4 text-[10px] text-zinc-400">Invece del browser puoi usare `cgui login` da riga di comando: il disco-cache CLI rimane disponibile come fallback per questa GUI.</p>
+      </div>
+    </div>
+  {/if}
 
   <main class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)_minmax(320px,1fr)]">
     <!-- ============================================ colonna FORM -->

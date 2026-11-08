@@ -7,13 +7,15 @@ avanti manualmente, quindi la suite è istantanea.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from cgui_studio import webui
-from cgui_studio.client import Client
+from cgui_studio.client import AuthError, Client
 from cgui_studio.webmock import FakeClient, bilayer_pdb_bytes, build_mock_tar
 
 
@@ -277,6 +279,94 @@ def test_non_mock_without_token_409():
     r = t.post("/api/jobs", json=_jobbody())
     assert r.status_code == 409
     assert "cgui login" in r.json()["detail"]
+    # il messaggio punta esplicitamente al tasto di login nella GUI web
+    assert "Login CHARMM-GUI" in r.json()["detail"]
+
+
+# -------------------------------------------------------------------- -- auth
+
+
+def test_auth_mock_login_rejected(gui):
+    """In mock non c'e' login reale: 409 educato, niente client reale chiamato."""
+    t, _ = gui
+    r = t.post("/api/auth/login", json={"email": "a@b.c", "password": "x"})
+    assert r.status_code == 409
+    assert "mock" in r.json()["detail"]
+
+
+def test_auth_status_fresh_app(gui):
+    t, _ = gui
+    r = t.get("/api/auth").json()
+    assert r == {"logged": False, "mock": True, "mode": "none"}
+
+
+def test_auth_login_ram_no_disk(tmp_path: Path):
+    """Login reale (http iniettato): token solo in RAM, MAI token.json su disco."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((str(request.url), request.headers.get("authorization", "<none>")))
+        if request.url.path.endswith("/login"):
+            return httpx.Response(200, json={"token": "ram-token-123"})
+        return httpx.Response(500, text="non dovrebbe arrivare qui")
+
+    real = Client(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    app = webui.create_app(mock=False, client_factory=lambda: real)
+    t = TestClient(app)
+
+    r = t.post("/api/auth/login", json={"email": "ric@lab.edu", "password": "segreto"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"logged": True, "email": "ri***@lab.edu", "mode": "ram"}
+
+    # GET /api/auth riflette la sessione RAM
+    r = t.get("/api/auth").json()
+    assert r["logged"] is True and r["mode"] == "ram" and r["email"] == "ri***@lab.edu"
+
+    # nessun token su disco, E le credenziali non finiscono tracciate in URI/header
+    from cgui_studio import paths
+
+    assert not paths.token_path().exists()
+    assert all("segreto" not in str(c) for c in calls)
+
+    # logout: sessione RAM chiusa, fallback cache = none, token azzerato sul client
+    r = t.delete("/api/auth")
+    assert r.json()["logged"] is False
+    assert t.get("/api/auth").json()["logged"] is False
+    with pytest.raises(AuthError):
+        real.token()
+
+
+def test_auth_login_wrong_credentials_401():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": "Invalid token", "detail": "Expired token"})
+
+    real = Client(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    app = webui.create_app(mock=False, client_factory=lambda: real)
+    t = TestClient(app)
+    r = t.post("/api/auth/login", json={"email": "a@b.c", "password": "y"})
+    assert r.status_code == 401
+    assert "login CHARMM-GUI rifiutato" in r.json()["detail"]
+
+
+def test_auth_disk_cache_fallback(gui):
+    """Se `cgui login` (CLI) ha lasciato il token in cache: GET auth lo mostra,
+    la sessione va usata, ma DELETE non cancella il file della CLI."""
+    from cgui_studio import paths
+
+    paths.write_private(
+        paths.token_path(), json.dumps({"token": "cli-token", "email": "cli@x.y"})
+    )
+    t, fake = gui
+    r = t.get("/api/auth")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["logged"] is True
+    assert data["mode"] == "disk-cache"
+    # logout via web NON tocca il file della CLI
+    t.delete("/api/auth")
+    assert paths.token_path().exists()
+    assert json.loads(paths.token_path().read_text(encoding="utf-8"))["token"] == "cli-token"
 
 
 def test_build_mock_tar_direct(tmp_path: Path):

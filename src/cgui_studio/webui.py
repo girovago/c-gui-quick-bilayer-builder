@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .client import ApiError, AuthError, CguiError, Client, JobError, fetch_job
 from .models import JobRecord, JobStatus, Spec
-from .paths import default_results_dir
+from .paths import default_results_dir, load_token
 from .store import JobStore
 from .webmock import FakeClient, bilayer_pdb_bytes
 
@@ -103,6 +103,15 @@ class FetchInput(BaseModel):
     timeout: float = 3600.0
 
 
+class AuthInput(BaseModel):
+    """Credenziali CHARMM-GUI: il token risultante resta SOLO in RAM (niente
+    token.json, niente log): non archiviamo mai credenziali altrui su disco."""
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    password: str
+
+
 class MakeBilayerInput(BaseModel):
     """Body di POST /api/make-bilayer: spec lipidica per build locale.
 
@@ -153,6 +162,9 @@ def create_app(
     app.state.mock = mock
     app.state.client = client_factory() if client_factory else (FakeClient() if mock else Client())
     app.state.store = JobStore()
+    # Auth CHARMM-GUI: SOLO in RAM. Volutamente non persistito: chiudendo il
+    # processo la sessione muore, come richiesto (zero credenziali su disco).
+    app.state.auth = {"token": None, "email": None, "ts": None, "expires": None}
     _routes(app, app.state.client, app.state.store)
     _mount_static(app)
     return app
@@ -164,7 +176,13 @@ def _map_errors(mock: bool) -> Iterator[None]:
     try:
         yield
     except AuthError:
-        msg = "esegui `uv run cgui login`" if not mock else "mock: auth non richiesta"
+        msg = (
+            "login CHARMM-GUI richiesto: usa il tasto Login CHARMM-GUI nella barra "
+            "in alto (oppure `uv run cgui login` da CLI). La GUI web non salva il "
+            "token su disco."
+            if not mock
+            else "mock: auth non richiesta"
+        )
         raise HTTPException(409, msg) from None
     except ApiError as exc:
         raise HTTPException(502, str(exc)) from exc
@@ -179,6 +197,65 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     @app.get("/api/ping")
     def ping() -> dict[str, Any]:
         return {"ok": True, "mock": app.state.mock}
+
+    # ------------------------------------------------------------- auth CHARMM-GUI
+    def _mask(email: str) -> str:
+        name, _, dom = email.partition("@")
+        if not dom:
+            return name[:2] + "***"
+        return f"{name[:2]}***@{dom}"
+
+    @app.post("/api/auth/login")
+    def auth_login(payload: AuthInput) -> dict[str, Any]:
+        """Login CHARMM-GUI: il JWT resta SOLO in RAM del processo (niente
+        token.json): chi riavvia il server rifà login, zero credenziali salvate."""
+        if app.state.mock:
+            raise HTTPException(409, "mock: il finto server non gestisce il login")
+        if not hasattr(app.state.client, "login_nocache"):
+            raise HTTPException(409, "client non reale: login non disponibile")
+        try:
+            token = app.state.client.login_nocache(payload.email, payload.password)
+        except AuthError as exc:
+            # NIENTE dettaglio password nel messaggio: resta solo la risposta server.
+            raise HTTPException(401, f"login CHARMM-GUI rifiutato: {exc}") from None
+        except ApiError as exc:
+            raise HTTPException(502, f"server CHARMM-GUI irraggiungibile: {exc}") from None
+        app.state.auth.update(
+            {"token": token, "email": payload.email, "ts": datetime.now(UTC).isoformat()}
+        )
+        app.state.client.set_token(token)
+        return {"logged": True, "email": _mask(payload.email), "mode": "ram"}
+
+    @app.get("/api/auth")
+    def auth_get() -> dict[str, Any]:
+        q = app.state.auth
+        if q.get("token"):
+            return {
+                "logged": True,
+                "email": _mask(str(q.get("email"))),
+                "ts": q.get("ts"),
+                "mode": "ram",
+                "mock": app.state.mock,
+            }
+        # fallback trasparente: token rilasciato da `cgui login` su disco
+        cached = load_token()
+        if cached and cached.get("token"):
+            return {
+                "logged": True,
+                "email": _mask(str(cached.get("email") or "dal comando cgui login")),
+                "mode": "disk-cache",
+                "mock": app.state.mock,
+            }
+        return {"logged": False, "mock": app.state.mock, "mode": "none"}
+
+    @app.delete("/api/auth")
+    def auth_logout() -> dict[str, Any]:
+        """Chiude la sessione in RAM. Il token cache su disco, se esiste (CLI),
+        resta com'è: qui non lo tocchiamo mai."""
+        app.state.auth.update({"token": None, "email": None, "ts": None, "expires": None})
+        if hasattr(app.state.client, "set_token"):
+            app.state.client.set_token(None)
+        return {"logged": False, "mode": "none"}
 
     @app.get("/api/sample/pdb")
     def sample_pdb() -> Response:

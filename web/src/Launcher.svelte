@@ -19,15 +19,25 @@
   const chargeColor = $derived(buildMetrics ? (buildMetrics.net_lipid_charge_e !== 0 ? "text-red-600" : "text-zinc-600") : "text-zinc-600");
 
   function applyPreset(k) { const p = PRESETS[k]; if (!p) return; symmetric = true; upperCounts = { ...p.upper }; lowerCounts = { ...p.lower }; }
+  function onSymChange() { if (!symmetric && totalCounts(lowerCounts) === 0) lowerCounts = { ...upperCounts }; }
   function goto(n) { if (n <= maxVisited) step = n; }
   function next() { if (stepValid()) { step = Math.min(step + 1, 4); maxVisited = Math.max(maxVisited, step); } }
   function back() { step = Math.max(step - 1, 1); }
-  function counts() { return symmetric || activeSide === "upper" ? upperCounts : lowerCounts; }
-  function setCounts(n) { if (symmetric || activeSide === "upper") upperCounts = n; else lowerCounts = n; }
+  function counts() { return symmetric ? upperCounts : lowerCounts; }
+  function setCounts(n) { if (symmetric) upperCounts = n; else lowerCounts = n; }
   function countOf(id) { return counts()[id] || 0; }
-  function add(id) { setCounts({ ...counts(), [id]: countOf(id) + 1 }); }
-  function sub(id) { const c = countOf(id); if (c > 0) { const n = { ...counts() }; if (c === 1) delete n[id]; else n[id] = c - 1; setCounts(n); } }
-  function selectedList() { return Object.entries(upperCounts).filter(([, v]) => v > 0); }
+  function setQty(id, n) {
+    const clean = Math.max(0, Math.min(4096, Math.round(n || 0)));
+    const next = { ...counts() };
+    if (clean <= 0) { delete next[id]; setCounts(next); return; }
+    next[id] = clean;
+    setCounts(next);
+  }
+  function add(id) { setQty(id, countOf(id) + 1); }
+  function removeOne(id) { setQty(id, countOf(id) - 1); }
+  function remove(id) { const n = { ...counts() }; delete n[id]; setCounts(n); }
+  function pickedList(side) { const c = side === "lower" && !symmetric ? lowerCounts : upperCounts; return Object.entries(c).filter(([, v]) => v > 0); }
+  function pick(id) { if (countOf(id) === 0) add(id); }
   function totalCounts(c) { return Object.values(c).reduce((s, v) => s + v, 0); }
   function specString(c) { return Object.entries(c).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(";"); }
   function filtered() { const q = search.trim().toUpperCase(); let list = LIPID_CATALOG; if (catFilter) list = list.filter(l => l.cat === catFilter); if (q) list = list.filter(l => l.id.includes(q)); else if (!catFilter) list = list.filter(l => COMMON.has(l.id)); return list.slice(0, 90); }
@@ -54,9 +64,9 @@
   <!-- Stepper -->
   <div class="flex items-center gap-1 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
     {#each STEPS as label, i}
-      {#if i > 0}<div class="h-px flex-1 bg-zinc-200"></div>{/if}
-      <button type="button" class="flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-300 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
-        <span class="flex h-6 w-6 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="font-medium">{label}</span>
+      {#if i > 0}<div class="h-px w-2 flex-1 bg-zinc-200 sm:w-4"></div>{/if}
+      <button type="button" class="flex min-w-[2.25rem] items-center justify-center gap-2 rounded-xl px-2 py-2 text-sm font-medium transition-all sm:min-w-0 sm:justify-start sm:px-4 {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-300 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
+        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="hidden whitespace-nowrap font-medium lg:inline">{label}</span>
       </button>
     {/each}
   </div>
@@ -65,7 +75,7 @@
     <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Che tipo di sistema costruisci?</h2><p class="text-sm text-zinc-500">Scegli il tipo di struttura da generare</p></div>
       <div class="grid grid-cols-2 gap-4">
-        {#each [{ id: "lipid", icon: "🧫", title: "Bilayer lipidico", sub: "Composizione due foglietti" }, { id: "protein", icon: "🧬", title: "Proteina", sub: "PDB ID o file" }, { id: "dna", icon: "🧬", title: "DNA", sub: "Sequenza nucleotidi" }, { id: "rna", icon: "🧬", title: "RNA", sub: "Sequenza nucleotidi" }, { id: "small-mol", icon: "💊", title: "Small molecule", sub: "PDB / SDF" }] as t}
+        {#each [{ id: "lipid", icon: "🧪", title: "Bilayer lipidico", sub: "Composizione due foglietti" }, { id: "protein", icon: "🧫", title: "Proteina", sub: "PDB ID o file" }, { id: "dna", icon: "🧬", title: "DNA", sub: "Sequenza nucleotidi" }, { id: "rna", icon: "🧬", title: "RNA", sub: "Sequenza nucleotidi" }, { id: "small-mol", icon: "💊", title: "Small molecule", sub: "PDB / SDF" }] as t}
           <button type="button" class="flex flex-col items-start rounded-xl border p-5 text-left transition-all {buildType === t.id ? 'border-cyan-500 bg-cyan-50/80 ring-2 ring-cyan-200 shadow-md shadow-cyan-100' : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-sm'}" onclick={() => (buildType = t.id)} aria-pressed={buildType === t.id}>
             <span class="text-3xl mb-2">{t.icon}</span><span class="text-base font-semibold text-zinc-900">{t.title}</span><span class="text-xs text-zinc-500 mt-1">{t.sub}</span>
           </button>
@@ -83,17 +93,68 @@
         <div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800"><span class="font-semibold">ℹ️ Builder locale:</span> testato per lipidi. Per proteine/DNA/RNA/small molecules <b>verrà inviato automaticamente a CHARMM-GUI</b> al click su "Crea struttura".</div>
       {/if}
       {#if buildType === "lipid"}
-        <div class="mb-4"><span class="text-xs font-semibold text-zinc-600 mb-2 block">Preset:</span><div class="flex flex-wrap gap-2">{#each Object.entries(PRESETS) as [k, p] (k)}<button type="button" class="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm text-zinc-700 hover:bg-cyan-50" onclick={() => applyPreset(k)} title={p.label}>{k}</button>{/each}</div></div>
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div class="lg:col-span-1">
-            <div class="flex items-center justify-between mb-3"><h3 class="text-sm font-semibold text-zinc-900">Catalogo</h3><input type="search" bind:value={search} placeholder="Cerca lipide…" class="w-64 rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-800 placeholder-zinc-400 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" /></div>
-            <div class="max-h-96 overflow-y-auto rounded-lg border border-zinc-100 p-2 space-y-1">{#each filtered() as l (l.id)}<div class="flex items-center justify-between rounded-lg px-3 py-2 {countOf(l.id) > 0 ? 'bg-cyan-50/60' : 'hover:bg-zinc-50 cursor-pointer'}"><div class="flex items-center gap-3"><span class="h-2 w-2 rounded-full" style="background-color: {CAT_COLORS[l.cat] || '#a1a1aa'}"></span><span class="text-sm font-semibold text-zinc-900">{l.id}</span><span class="text-[10px] text-zinc-400">{l.cat}</span></div><div class="flex items-center gap-2"><button type="button" class="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-lg font-bold text-zinc-600 hover:bg-zinc-200 disabled:opacity-40" onclick={() => sub(l.id)} disabled={countOf(l.id) === 0} aria-label="Rimuovi {l.id}">−</button><span class="w-8 text-center text-sm font-bold tabular-nums text-zinc-900">{countOf(l.id)}</span><button type="button" class="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-500 text-lg font-bold text-white hover:bg-cyan-600 shadow-sm shadow-cyan-200" onclick={() => add(l.id)} aria-label="Aggiungi {l.id}">+</button></div></div>{/each}</div>
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <span class="text-xs font-semibold text-zinc-600 shrink-0">Preset:</span>
+          {#each Object.entries(PRESETS) as [k, p] (k)}
+            <button type="button" class="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:border-cyan-400 hover:bg-cyan-50" onclick={() => applyPreset(k)} title={p.label}>{p.label}</button>
+          {/each}
+        </div>
+        <div class="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-2.5">
+          <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-zinc-700">
+            <input type="checkbox" bind:checked={symmetric} onchange={onSymChange} class="accent-cyan-500" /> Foglietti identici
+          </label>
+          {#if !symmetric}
+            <div class="flex rounded-lg border border-zinc-300 bg-white p-0.5" role="tablist" aria-label="Foglio attivo">
+              <button type="button" role="tab" aria-selected={activeSide === "upper"} class="rounded-md px-3 py-1 text-xs font-semibold transition-colors {activeSide === 'upper' ? 'bg-cyan-500 text-white shadow-sm' : 'text-zinc-600 hover:bg-zinc-100'}" onclick={() => (activeSide = "upper")}>Foglio superiore</button>
+              <button type="button" role="tab" aria-selected={activeSide === "lower"} class="rounded-md px-3 py-1 text-xs font-semibold transition-colors {activeSide === 'lower' ? 'bg-cyan-500 text-white shadow-sm' : 'text-zinc-600 hover:bg-zinc-100'}" onclick={() => (activeSide = "lower")}>Foglio inferiore</button>
+            </div>
+            <span class="text-[10px] text-zinc-400">le quantità vanno nel foglio selezionato</span>
+          {/if}
+          <span class="ml-auto text-xs font-medium text-zinc-500">{totalCounts(counts())} lipidi</span>
+        </div>
+        <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div class="rounded-xl border border-zinc-200 p-3">
+            <div class="mb-2 flex items-center gap-2">
+              <h3 class="shrink-0 text-sm font-semibold text-zinc-900">Catalogo</h3>
+              <input type="search" bind:value={search} placeholder="Cerca tra 411 lipidi…" class="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs text-zinc-800 placeholder-zinc-400 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" />
+            </div>
+            <div class="max-h-80 space-y-0.5 overflow-y-auto">
+              {#each filtered() as l (l.id)}
+                <button type="button" class="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left transition-colors {countOf(l.id) > 0 ? 'bg-cyan-50/70 hover:bg-cyan-100/70' : 'hover:bg-zinc-50'}" onclick={() => pick(l.id)}>
+                  <span class="flex items-center gap-2"><span class="h-2 w-2 rounded-full" style="background-color: {CAT_COLORS[l.cat] || '#a1a1aa'}"></span><span class="text-xs font-semibold text-zinc-900">{l.id}</span><span class="text-[10px] text-zinc-400">{l.cat}</span></span>
+                  <span class="text-[11px] font-bold {countOf(l.id) > 0 ? 'text-cyan-700' : 'text-zinc-300'}">{countOf(l.id) > 0 ? `×${countOf(l.id)}` : "+"}</span>
+                </button>
+              {/each}
+            </div>
+            <p class="mt-1.5 text-right text-[10px] text-zinc-400">{filtered().length} elencati · clicca per aggiungere{#if !search.trim() && !catFilter}, usa la ricerca per tutti i 411{/if}</p>
           </div>
-          <div class="lg:col-span-1">
-            <h3 class="text-sm font-semibold text-zinc-900 mb-3">Foglio {activeSide === 'upper' ? 'superiore' : 'inferiore'}</h3>
-            {#if selectedList().length > 0}<div class="flex flex-wrap gap-2 mb-4">{#each selectedList() as [id, n] (id)}<span class="flex items-center gap-2 rounded-full bg-white border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-800 shadow-sm">{id}<span class="text-zinc-400">×</span><span class="font-bold">{n}</span><button type="button" class="text-zinc-400 hover:text-red-500 ml-1" onclick={() => sub(id)}>✕</button></span>{/each}</div>{:else}<div class="rounded-lg bg-zinc-50 border border-zinc-200 p-6 text-center"><p class="text-xs text-zinc-500 mb-2">Nessun lipide selezionato</p><p class="text-[10px] text-zinc-400">Usa i tasti + per aggiungere</p></div>{/if}
-            <div class="mt-auto pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
+          <div class="rounded-xl border border-zinc-200 p-3">
+            <h3 class="mb-2 text-sm font-semibold text-zinc-900">Foglio {activeSide === "upper" ? "superiore" : "inferiore"}</h3>
+            {#if pickedList(activeSide).length > 0}
+              <div class="max-h-80 space-y-1 overflow-y-auto pr-1">
+                {#each pickedList(activeSide) as [id, n] (id)}
+                  <div class="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5">
+                    <span class="h-2 w-2 rounded-full shrink-0" style="background-color: {CAT_COLORS[LIPID_CATALOG.find(l => l.id === id)?.cat] || '#a1a1aa'}"></span>
+                    <span class="w-16 shrink-0 text-xs font-semibold text-zinc-900">{id}</span>
+                    <input type="number" min="1" max="4096" value={n} oninput={(e) => setQty(id, +e.target.value)} aria-label="Quantità {id}" class="w-16 rounded-md border border-zinc-300 px-1.5 py-0.5 text-center text-xs font-bold tabular-nums text-zinc-900 focus:border-cyan-500 focus:outline-none" />
+                    <span class="hidden text-[10px] text-zinc-400 xl:inline">qty</span>
+                    <div class="ml-auto flex items-center gap-1">
+                      <button type="button" onclick={() => removeOne(id)} class="h-6 w-6 rounded-full bg-zinc-100 text-sm font-bold text-zinc-600 hover:bg-zinc-200" aria-label="-1 {id}">−</button>
+                      <button type="button" onclick={() => add(id)} class="h-6 w-6 rounded-full bg-cyan-500 text-sm font-bold text-white hover:bg-cyan-600" aria-label="+1 {id}">+</button>
+                      <button type="button" onclick={() => remove(id)} class="ml-0.5 px-1 text-xs text-zinc-400 hover:text-red-500" aria-label="Rimuovi {id}">✕</button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div class="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-5 text-center">
+                <p class="text-xs text-zinc-500">Clicca un lipide nel catalogo, poi digita la quantità qui</p>
+              </div>
+            {/if}
           </div>
+        </div>
+        <div class="mt-5 flex gap-3 border-t border-zinc-100 pt-5">
+          <button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button>
         </div>
       {:else if buildType === "protein"}
         <div class="space-y-5"><div><label class="block text-sm font-semibold text-zinc-900 mb-2">PDB ID</label><input type="text" bind:value={proteinPdbId} maxlength="4" placeholder="Es. 1ABC" class="w-full rounded-lg border border-zinc-300 px-4 py-2.5 text-sm uppercase tracking-widest text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200" /></div><div class="border border-dashed border-zinc-300 rounded-xl p-6 text-center hover:bg-zinc-50 transition-colors"><label class="flex items-center gap-3 cursor-pointer group"><input type="file" accept=".pdb,.pdbqt" class="hidden" onchange={(e) => { if (e.target.files?.[0]) proteinPdbFile = e.target.files[0]; }} /><span class="text-2xl group-hover:text-cyan-500 transition-colors">📁</span><span class="text-sm text-zinc-700">{proteinPdbFile ? proteinPdbFile.name : "oppure carica un file PDB"}</span></label></div></div>
@@ -127,7 +188,7 @@
         </div>
         <div class="space-y-4">
           <div><label class="block text-sm font-semibold text-zinc-900 mb-3">Solvente</label><select bind:value={solvent} class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"><option value="water">Acqua TIP3P</option><option value="none">Nessuno</option></select></div>
-          <div><label class="block text-sm font-semibold text-zinc-900 mb-3">Ioni</label><select bind:value={ions} class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"><option value="KCl">KCl 0.15 M</option><option value="NaCl">NaCl 0.15 M</option><option value="none">Nessuno</option></select></div>
+          <div><label class="block text-sm font-semibold text-zinc-900 mb-3">Ioni</label><select bind:value={ions} class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"><option value="KCl">KCl (potassio cloruro)</option><option value="NaCl">NaCl (sodio cloruro)</option><option value="none">Nessuno</option></select></div>
         </div>
       </div>
       <div class="mt-6 rounded-lg bg-zinc-50 border border-zinc-200 p-4"><p class="text-xs text-zinc-500 leading-relaxed"><span class="font-semibold text-zinc-700">ℹ️ Mescolamento laterale:</span> specie distribuite casualmente nei foglietti (seed riproducibile), come in una membrana reale.</p></div>

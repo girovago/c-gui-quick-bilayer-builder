@@ -123,8 +123,17 @@ class Client:
             return self._token
         raise AuthError("Nessun token in cache: esegui prima `cgui login`.")
 
-    def login(self, email: str | None = None, password: str | None = None) -> str:
-        """Autentica e mette il token in cache (0600). Ritorna il JWT."""
+    def set_token(self, token: str | None) -> None:
+        """Imposta/azzera il token in memoria.(routes web: token RAM-only)."""
+        self._token = token
+
+    def login_nocache(self, email: str | None = None, password: str | None = None) -> str:
+        """Autentica e RITORNA il token senza toccare la cache su disco.
+
+        Usato dalla GUI web: il token resta solo in RAM del processo server
+        (vogliono che CHARMM-GUI resti a pratica del ricercatore davanti, non
+        che la nostra app archivi credenziali). ``login()`` aggiunge la cache.
+        """
         email = email or self.email
         password = password or self.password
         if not email or not password:
@@ -147,9 +156,13 @@ class Client:
             raise ApiError(f"nessun campo token nella risposta di login: {payload}")
 
         self._token = str(token)
-        self.email = email
-        paths.save_token(self._token, email)
         return self._token
+
+    def login(self, email: str | None = None, password: str | None = None) -> str:
+        """Autentica e mette il token in cache (0600). Ritorna il JWT."""
+        token = self.login_nocache(email, password)
+        paths.save_token(token, email or self.email)
+        return token
 
     # -------------------------------------------------------------------- HTTP
     def _request(

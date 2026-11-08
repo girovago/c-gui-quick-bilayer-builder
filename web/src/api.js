@@ -53,3 +53,21 @@ export function formToPayload(form) {
     clone_job: form.clone_job || null,
   };
 }
+
+/** Login CHARMM-GUI: POST credenziali, ritorna token (RAM only, niente disco). */
+export async function authLogin(email, password) {
+  return api("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+/** Stato della sessione auth (GET /api/auth). */
+export async function authGet() {
+  return api("/api/auth");
+}
+
+/** Logout: cancella la sessione in RAM del server. */
+export async function authLogout() {
+  return api("/api/auth", { method: "DELETE" });
+}
