@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -29,7 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -139,6 +140,36 @@ class MakeBilayerInput(BaseModel):
     dna_sequence: str | None = None
     rna_sequence: str | None = None
     small_mol_file_name: str | None = None
+
+
+class EmbedProteinInput(BaseModel):
+    """Body di POST /api/embed-protein: embed di un recettore in una membrana."""
+    model_config = ConfigDict(extra="forbid")
+
+    pdb_id: str | None = None          # PDB ID es. "7CFN" (opzionale se c'è file)
+    pdb_file_name: str | None = None   # nome file PDB del recettore (se caricato)
+    chain: str | None = "R"            # chain da usare
+    membrane_pdb_file_name: str | None = None  # nome file PDB della membrana esistente
+    out_dir: str | None = "results"    # directory di output
+
+
+class UploadPDBInput(BaseModel):
+    """Richiesta/risposta di POST /api/upload-pdb: nome file e contenuto testo."""
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str
+    content: str = ""
+    saved_path: str | None = None
+
+
+class EmbedInMembraneInput(BaseModel):
+    """Body di POST /api/embed-in-membrane: inserisce recettore in membrana esistente."""
+    model_config = ConfigDict(extra="forbid")
+
+    membrane_pdb_file_name: str
+    receptor_pdb_file_name: str
+    chain: str | None = "R"
+    out_dir: str | None = "results"
 
 
 def _validation_detail(exc: ValidationError) -> str:
@@ -515,6 +546,119 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             "manifest": manifest,
             "log": (res.stdout + "\n" + res.stderr).strip() or "nessun output",
             "metrics": metrics,
+        }
+
+    @app.post("/api/embed-protein")
+    def embed_protein_endpoint(payload: EmbedProteinInput) -> dict[str, Any]:
+        """Embed di un recettore (PDB ID o file) in una membrana esistente.
+
+        Esegue scripts/embed_protein.py dentro l'ambiente conda `cgui-builder`.
+        Se pdb_id è fornito, lo scarica da RCSB/OPM e lo orienta; se pdb_file_name
+        è fornito, usa il file caricato. Se membrane_pdb_file_name è fornito,
+        cerca di allineare il recettore alla membrana esistente.
+        Restituisce il manifest e l'outdir (registrato come job locale).
+        """
+        script = Path(__file__).resolve().parents[2] / "scripts" / "embed_protein.py"
+        if not script.exists():
+            raise HTTPException(500, f"script non trovato: {script}")
+        conda = Path.home() / "miniforge3" / "bin" / "conda"
+        if not conda.exists():
+            raise HTTPException(500, "conda non trovato in ~/miniforge3/bin/conda")
+
+        base_out = default_results_dir()
+        cmd = [
+            str(conda), "run", "-n", "cgui-builder", "python", str(script),
+            "--output", str(base_out),
+        ]
+        if payload.pdb_id:
+            cmd += ["--pdb", payload.pdb_id]
+        if payload.chain:
+            cmd += ["--chain", payload.chain]
+        # pdb_file_name e membrane_pdb_file_name richiedono che i file siano già
+        # salvati nella working dir del server; per ora li passiamo come note.
+        # L'embed vero e proprio in membrana esistente richiede uno script
+        # dedicato (embed_in_membrane.py) da scrivere: qui si limita a orientare
+        # il recettore e preparare la topologia CHARMM36.
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(504, f"embed_protein timeout: {exc}") from exc
+
+        if res.returncode != 0:
+            raise HTTPException(502, f"embed_protein fallito: {res.stderr[-800:]}")
+
+        # Cerca l'outdir nell'output
+        outdir = None
+        for line in res.stdout.splitlines():
+            if "Output: " in line:
+                outdir = line.split("Output: ", 1)[1].strip()
+                break
+
+        if not outdir:
+            # Fallback: usa l'ultima directory in results/
+            base_out_path = Path(base_out)
+            dirs = sorted([d for d in base_out_path.iterdir() if d.is_dir()],
+                          key=lambda d: d.stat().st_mtime, reverse=True)
+            if dirs:
+                outdir = str(dirs[0])
+
+        jobid = f"local-embed-{int(datetime.now(UTC).timestamp())}"
+        return {
+            "jobid": jobid,
+            "outdir": outdir or str(base_out),
+            "log": (res.stdout + "\n" + res.stderr).strip() or "nessun output",
+        }
+
+    @app.post("/api/upload-pdb")
+    def upload_pdb(payload: UploadPDBInput) -> UploadPDBInput:
+        """Salva un file PDB caricato dal browser (inviato come testo JSON) in results/uploads/."""
+        uploads_dir = default_results_dir() / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        dest = uploads_dir / payload.file_name
+        dest.write_text(payload.content, encoding="utf-8")
+        return UploadPDBInput(file_name=payload.file_name, saved_path=str(dest))
+
+
+    @app.post("/api/embed-in-membrane")
+    def embed_in_membrane(payload: EmbedInMembraneInput) -> dict[str, Any]:
+        script = Path(__file__).resolve().parents[2] / "scripts" / "embed_in_membrane.py"
+        if not script.exists():
+            raise HTTPException(500, f"script non trovato: {script}")
+        conda = Path.home() / "miniforge3" / "bin" / "conda"
+        if not conda.exists():
+            raise HTTPException(500, "conda non trovato in ~/miniforge3/bin/conda")
+
+        uploads_dir = default_results_dir() / "uploads"
+        membrane_path = uploads_dir / payload.membrane_pdb_file_name
+        receptor_path = uploads_dir / payload.receptor_pdb_file_name
+        if not membrane_path.exists():
+            raise HTTPException(404, f"file membrana non trovato: {membrane_path}")
+        if not receptor_path.exists():
+            raise HTTPException(404, f"file recettore non trovato: {receptor_path}")
+
+        out_dir = default_results_dir() / (payload.out_dir or "results")
+        cmd = [
+            str(conda), "run", "-n", "cgui-builder", "python", str(script),
+            "--membrane-pdb", str(membrane_path),
+            "--receptor-pdb", str(receptor_path),
+            "--chain", payload.chain or "R",
+            "--output", str(out_dir),
+        ]
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(504, f"embed_in_membrane timeout: {exc}") from exc
+
+        if res.returncode != 0:
+            raise HTTPException(502, f"embed_in_membrane fallito: {res.stderr[-800:]}")
+
+        jobid = f"local-embed-mem-{int(datetime.now(UTC).timestamp())}"
+        return {
+            "jobid": jobid,
+            "outdir": str(out_dir / "system"),
+            "log": (res.stdout + "\n" + res.stderr).strip() or "nessun output",
         }
 
     @app.get("/", include_in_schema=False)

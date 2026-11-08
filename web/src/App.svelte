@@ -425,16 +425,16 @@
 
   {#if loginOpen}
     <div class="fixed inset-0 z-[60] flex items-center justify-center" aria-hidden="true">
-      <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick={() => (loginOpen = false)} />
+      <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" role="button" tabindex={0} aria-label="Chiudi" onclick={() => (loginOpen = false)} onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") loginOpen = false; }}></div>
       <div class="bg-white rounded-2xl border border-zinc-200 p-6 shadow-2xl w-full max-w-xs mx-4">
         <h2 class="mb-4 text-lg font-semibold text-zinc-900">Login CHARMM-GUI</h2>
         <p class="mb-4 text-xs text-zinc-500 leading-relaxed">Inserisci email e password di CHARMM-GUI. <b>Non salvamo nulla su disco</b>: il token resta solo in RAM del server locale e svanisce al riavvio o al logout.</p>
         <form onsubmit={doLogin}>
           <div class="space-y-3 mb-4">
-            <label class="block text-xs font-medium text-zinc-700">Email</label>
-            <input type="email" bind:value={loginData.email} placeholder="nome@istituto.it" class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
-            <label class="block text-xs font-medium text-zinc-700">Password</label>
-            <input type="password" bind:value={loginData.password} class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
+            <label class="block text-xs font-medium text-zinc-700" for="login-email">Email</label>
+            <input id="login-email" type="email" bind:value={loginData.email} placeholder="nome@istituto.it" class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
+            <label class="block text-xs font-medium text-zinc-700" for="login-password">Password</label>
+            <input id="login-password" type="password" bind:value={loginData.password} class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
           </div>
           <div class="flex gap-3">
             <button type="button" class="flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100" onclick={() => (loginOpen = false)}>Annulla</button>

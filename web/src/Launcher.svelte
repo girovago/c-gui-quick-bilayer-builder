@@ -12,6 +12,8 @@
   let step = $state(1), maxVisited = $state(1), buildType = $state("lipid");
   let symmetric = $state(true), upperCounts = $state({}), lowerCounts = $state({}), activeSide = $state("upper");
   let search = $state(""), catFilter = $state("");
+  let membraneFiles = null, receptorFiles = null;
+  let embedErr = $state(""), embedBusy = $state(false);
   let proteinPdbId = $state(""), proteinPdbFile = null, dnaSequence = $state(""), rnaSequence = $state(""), smallMolFile = null;
   let boxX = $state(12), boxY = $state(12), boxZ = $state(12), centerStructure = $state(true), solvent = $state("water"), ions = $state("KCl");
 
@@ -38,6 +40,54 @@
   function remove(id) { const n = { ...counts() }; delete n[id]; setCounts(n); }
   function pickedList(side) { const c = side === "lower" && !symmetric ? lowerCounts : upperCounts; return Object.entries(c).filter(([, v]) => v > 0); }
   function pick(id) { if (countOf(id) === 0) add(id); }
+
+  async function embedReceptor() {
+    embedErr = ""; embedBusy = true;
+    try {
+      const mf = membraneFiles?.[0], rf = receptorFiles?.[0];
+      if (!mf || !rf) { embedErr = "Seleziona entrambi i file PDB"; return; }
+
+      // 1) Salva entrambi i file sul server
+      async function upload(file) {
+        const text = await file.text();
+        const res = await fetch("/api/upload-pdb", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file_name: file.name, content: text }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.detail || `upload fallito ${res.status}`);
+        }
+        const d = await res.json();
+        return d.file_name;
+      }
+      const mName = await upload(mf);
+      const rName = await upload(rf);
+
+      // 2) Chiama embed-in-membrane
+      const res = await fetch("/api/embed-in-membrane", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          membrane_pdb_file_name: mName,
+          receptor_pdb_file_name: rName,
+          chain: "R",
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        embedErr = d.detail || `HTTP ${res.status}`;
+        return;
+      }
+      const d = await res.json();
+      flash?.("ok", `Recettore inserito: job ${d.jobid}`);
+    } catch (e) {
+      embedErr = e.message;
+    } finally {
+      embedBusy = false;
+    }
+  }
   function totalCounts(c) { return Object.values(c).reduce((s, v) => s + v, 0); }
   const ALIAS_LIPID = { CHOL: "CHL1" };
   function specString(c) {
@@ -81,7 +131,7 @@
     <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Che tipo di sistema costruisci?</h2><p class="text-sm text-zinc-500">Scegli il tipo di struttura da generare</p></div>
       <div class="grid grid-cols-2 gap-4">
-        {#each [{ id: "lipid", icon: "🧪", title: "Bilayer lipidico", sub: "Composizione due foglietti" }, { id: "protein", icon: "🧫", title: "Proteina", sub: "PDB ID o file" }, { id: "dna", icon: "🧬", title: "DNA", sub: "Sequenza nucleotidi" }, { id: "rna", icon: "🧬", title: "RNA", sub: "Sequenza nucleotidi" }, { id: "small-mol", icon: "💊", title: "Small molecule", sub: "PDB / SDF" }] as t}
+        {#each [{ id: "lipid", icon: "🧪", title: "Bilayer lipidico", sub: "Composizione due foglietti" }, { id: "protein", icon: "🧫", title: "Proteina", sub: "PDB ID o file — embed nella membrana (opzione 1)" }, { id: "dna", icon: "🧬", title: "DNA", sub: "Sequenza nucleotidi" }, { id: "rna", icon: "🧬", title: "RNA", sub: "Sequenza nucleotidi" }, { id: "small-mol", icon: "💊", title: "Small molecule", sub: "PDB / SDF" }] as t}
           <button type="button" class="flex flex-col items-start rounded-xl border p-5 text-left transition-all {buildType === t.id ? 'border-cyan-500 bg-cyan-50/80 ring-2 ring-cyan-200 shadow-md shadow-cyan-100' : 'border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-sm'}" onclick={() => (buildType = t.id)} aria-pressed={buildType === t.id}>
             <span class="text-3xl mb-2">{t.icon}</span><span class="text-base font-semibold text-zinc-900">{t.title}</span><span class="text-xs text-zinc-500 mt-1">{t.sub}</span>
           </button>
@@ -159,6 +209,24 @@
             {/if}
           </div>
         </div>
+
+        {#if buildType === "lipid"}
+          <div class="mt-6 rounded-lg bg-indigo-50 border border-indigo-200 p-4">
+            <div class="flex items-center gap-2 mb-2"><span class="font-semibold text-indigo-800 text-xs">🎯 Opzione 2 — Inserisci recettore in membrana esistente</span></div>
+            <p class="text-xs text-indigo-700 mb-3">Carica il PDB della membrana già generata e il PDB del recettore per inserirlo nella membrana.</p>
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <div><label class="block text-[10px] text-indigo-600 mb-1">Membrana (PDB)</label><input type="file" accept=".pdb" class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs" bind:files={membraneFiles} /></div>
+              <div><label class="block text-[10px] text-indigo-600 mb-1">Recettore (PDB)</label><input type="file" accept=".pdb" class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs" bind:files={receptorFiles} /></div>
+            </div>
+            <button type="button" disabled={!membraneFiles?.length || !receptorFiles?.length} class="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50" onclick={embedReceptor}>
+              {embedBusy ? "Inserimento in corso…" : "▶ Inserisci recettore nella membrana"}
+            </button>
+            {#if embedErr}
+              <div class="mt-2 text-[10px] text-red-600">{embedErr}</div>
+            {/if}
+          </div>
+        {/if}
+
         <div class="mt-5 flex gap-3 border-t border-zinc-100 pt-5">
           <button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button>
         </div>
@@ -207,6 +275,13 @@
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Riepilogo</h2><p class="text-sm text-zinc-500">Verifica prima di generare</p></div>
       {#if buildType !== "lipid"}
         <div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800"><span class="font-semibold">ℹ️ Builder locale:</span> testato per lipidi. Per proteine/DNA/RNA/small molecules <b>verrà inviato automaticamente a CHARMM-GUI</b> al click su "Crea struttura".</div>
+        {#if buildType === "protein"}
+          <div class="mt-4 rounded-lg bg-blue-50 border border-blue-200 p-4 text-xs text-blue-800">
+            <span class="font-semibold">🔗 Opzione 1 — Proteina nella membrana:</span><br/>
+            Il builder scarica l'orientamento OPM/PPM del PDB, lo centra nella membrana lipidica, genera la topologia CHARMM36 e prepara i file per <code>gmx grompp</code>. <br/>
+            <span class="font-semibold">⚠️ Limite attuale:</span> l'inserimento di una proteina in una <i>membrana già pronta</i> (opzione 2) richiede uno script dedicato in arrivo; per ora usa "Crea struttura" con il PDB della proteina.
+          </div>
+        {/if}
       {/if}
       <div class="rounded-lg bg-zinc-50 border border-zinc-200 p-5 font-mono text-xs leading-relaxed text-zinc-800">
         {#if buildType === "lipid"}
