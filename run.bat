@@ -1,5 +1,5 @@
 @echo off
-rem cgui-studio: avvio rapido (Windows). Il server gira sul TUO PC.
+rem C-gui Quick Bilayer Builder: avvio rapido (Windows). Il server gira sul TUO PC.
 rem Uso: double click. Per la demo senza login: CGUI_MOCK=1 (vedi README).
 
 cd /d "%~dp0"
@@ -32,7 +32,7 @@ if not exist "web\dist\index.html" (
 set "PORT=8756"
 if defined CGUI_PORT set "PORT=%CGUI_PORT%"
 set "URL=http://127.0.0.1:%PORT%"
-echo cgui-studio su %URL%  (CTRL+C per fermare)
+echo C-gui Quick Bilayer Builder su %URL%  (CTRL+C per fermare)
 
 start "" /b cmd /c "timeout /t 5 /nobreak >nul & start %URL%"
 

@@ -433,7 +433,7 @@
   {/if}
   <header class="mb-4 flex items-baseline justify-between gap-4">
     <h1 class="text-lg font-semibold tracking-tight text-zinc-800">
-      cgui-studio <span class="text-zinc-500">· Quick Bilayer wizard</span>
+      C-gui Quick Bilayer Builder <span class="text-zinc-500">· wizard</span>
     </h1>
     <span class="rounded-full border border-cyan-300 px-2 py-0.5 text-xs text-cyan-700" title="CGUI_MOCK=1: nessuna chiamata reale a charmm-gui.org">
       {mockMode ? "MOCK" : "API reale"}
@@ -680,6 +680,6 @@
   {/if}
 
   <p class="mt-4 text-center text-xs text-zinc-600">
-    cgui-studio (MIT) · sul server reale la coda può restare lunga: il mock chiude in ~8s
+    C-gui Quick Bilayer Builder (MIT) · sul server reale la coda può restare lunga: il mock chiude in ~8s
   </p>
 </div>

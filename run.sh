@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cgui-studio: avvio rapido (Linux / macOS).
+# C-gui Quick Bilayer Builder: avvio rapido (Linux / macOS).
 # Il server gira sul TUO PC: nessun bisogno di altre macchine.
 # Uso: ./run.sh            (server reale, porta 8756)
 #      CGUI_PORT=9000 ./run.sh
@@ -29,7 +29,7 @@ fi
 
 PORT="${CGUI_PORT:-8756}"
 URL="http://127.0.0.1:$PORT"
-echo "cgui-studio su $URL  (Ctrl+C per fermare)"
+echo "C-gui Quick Bilayer Builder su $URL  (Ctrl+C per fermare)"
 
 # apre il browser dopo che il server è su
 ( sleep 5; xdg-open "$URL" >/dev/null 2>&1 || open "$URL" >/dev/null 2>&1; ) &

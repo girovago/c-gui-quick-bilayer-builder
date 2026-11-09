@@ -1,10 +1,10 @@
-# cgui-studio
+# C-gui Quick Bilayer Builder
 
 Laboratorio personale di **drug design / drug discovery**: struttura molecolare, dinamica molecolare (MD) e CADD.
 
 Contiene:
 
-- **cgui-studio** — GUI web locale (FastAPI + Svelte 5 + Tailwind + NGL vendored) sopra l'API REST ufficiale di CHARMM-GUI (Quick Bilayer). Costruzione batch di composizioni lipidiche con manifest di provenance e output GROMACS pronto.
+- **C-gui Quick Bilayer Builder** (`cgui-studio` su disco) — GUI web locale (FastAPI + Svelte 5 + Tailwind + NGL vendored) sopra l'API REST ufficiale di CHARMM-GUI (Quick Bilayer). Costruzione batch di composizioni lipidiche con manifest di provenance e output GROMACS pronto.
 - **scripts/make_bilayer.py** — builder molecolare **all-atom in locale** (no server CHARMM-GUI necessario): costruisce bilayer, sistemi con proteine, acidi nucleici (DNA/RNA), small molecules e piccoli complessi, ed esegue direttamente GROMACS (editconf, solvate, grompp, mdrun).
 
 ---
@@ -54,7 +54,7 @@ cgui-studio/
 
 ---
 
-## GUI web (cgui-studio)
+## GUI web — C-gui Quick Bilayer Builder
 
 App web locale su `http://127.0.0.1:8756` (porta configurabile):
 

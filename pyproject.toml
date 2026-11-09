@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cgui-studio"
+name = "cgui-quick-bilayer-builder"
 version = "0.1.0"
-description = "Batch, reproducible layer over the CHARMM-GUI REST API"
+description = "C-gui Quick Bilayer Builder: local all-atom bilayer builder (GROMACS-ready) with batch CHARMM-GUI API wrapper"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
