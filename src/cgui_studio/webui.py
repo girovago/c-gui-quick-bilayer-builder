@@ -422,10 +422,15 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     @app.get("/api/files/{jobid}/{file_path:path}")
     def file_content(jobid: str, file_path: str) -> FileResponse:
         system = _system_dir(store, jobid)
+        system_root = system.resolve()
         if ".." in PurePosixPath(file_path).parts:
             raise HTTPException(404, "path rifiutato: fuori dalla cartella system del job")
         candidate = (system / file_path).resolve()
-        if not candidate.is_relative_to(system.resolve()) or candidate.is_symlink():
+        try:
+            candidate.relative_to(system_root)
+        except ValueError:
+            raise HTTPException(404, "path rifiutato: fuori system del job") from None
+        if candidate.is_symlink():
             raise HTTPException(404, "path rifiutato: fuori dalla cartella system del job")
         if not candidate.is_file():
             raise HTTPException(404, f"file non trovato nel job {jobid}: {file_path}")
@@ -638,12 +643,18 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
 
     @app.post("/api/upload-pdb")
     def upload_pdb(payload: UploadPDBInput) -> UploadPDBInput:
-        """Salva un file PDB caricato dal browser (inviato come testo JSON) in results/uploads/."""
+        """Salva un file PDB caricato dal browser (inviato come testo JSON) in results/uploads/.
+        Limite di sicurezza: 10 MB max, nome base senza slash (no path traversal)."""
+        if len(payload.content.encode("utf-8")) > 10 * 1024 * 1024:
+            raise HTTPException(413, "file troppo grande: max 10 MB")
         uploads_dir = default_results_dir() / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
-        dest = uploads_dir / payload.file_name
+        nome = Path(payload.file_name).name
+        if nome != payload.file_name:
+            raise HTTPException(400, "nome file non valido: solo nome base, niente cartelle")
+        dest = uploads_dir / nome
         dest.write_text(payload.content, encoding="utf-8")
-        return UploadPDBInput(file_name=payload.file_name, saved_path=str(dest))
+        return UploadPDBInput(file_name=nome, saved_path=str(dest))
 
 
     @app.post("/api/embed-in-membrane")
@@ -674,7 +685,7 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             membrane_path = _find_pdb(payload.membrane_pdb_file_name)
             receptor_path = _find_pdb(payload.receptor_pdb_file_name)
         except FileNotFoundError as exc:
-            raise HTTPException(404, f"file PDB non trovato: {exc}")
+            raise HTTPException(404, f"file PDB non trovato: {exc}") from None
 
         out_dir = default_results_dir() / (payload.out_dir or "results")
         cmd = [
