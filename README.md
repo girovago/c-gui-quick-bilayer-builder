@@ -1,223 +1,222 @@
 # C-gui Quick Bilayer Builder — v1.0-alpha
 
-Laboratorio personale di **drug design / drug discovery**: struttura molecolare, dinamica molecolare (MD) e CADD.
+Personal laboratory for **drug design / drug discovery**: molecular structure, molecular dynamics (MD) and CADD.
 
-> **Trasparenza IA:** questo progetto è stato scritto e revisionato con l'assistenza di modelli linguistici di grandi dimensioni (LLM) — è giusto che chi lo usa lo sappia. Il codice è stato verificato a livello di test unitari (186 test) e con un audit scientifico sul builder lipidico, ma per sistemi di produzione (MD lunghi, pubblicazioni) va sempre validato con i propri dati e con le proprie simulazioni.
+> **AI transparency:** this project was written and reviewed with the assistance of large language models (LLMs) — it is only fair that users know. The code has been verified with unit tests (186 tests) and a scientific audit of the lipid builder, but for production systems (long MD runs, publications) it should always be validated against your own data and simulations.
 
-Contiene:
+Contains:
 
-- **C-gui Quick Bilayer Builder** (`cgui-studio` su disco) — GUI web locale (FastAPI + Svelte 5 + Tailwind + NGL vendored) sopra l'API REST ufficiale di CHARMM-GUI (Quick Bilayer). Costruzione batch di composizioni lipidiche con manifest di provenance e output GROMACS pronto.
-- **scripts/make_bilayer.py** — builder molecolare **all-atom in locale** (no server CHARMM-GUI necessario): costruisce bilayer, sistemi con proteine, acidi nucleici (DNA/RNA), small molecules e piccoli complessi, ed esegue direttamente GROMACS (editconf, solvate, grompp, mdrun).
-
----
-
-## Indice
-
-1. [Struttura del progetto](#struttura-del-progetto)
-2. [GUI web (cgui-studio)](#gui-web-cgui-studio)
-3. **Builder all-atom locale (`scripts/make_bilayer.py`) — NUOVO**
-4. **Supporto molecole: lipidi, proteine, acidi nucleici, small molecules — NUOVO**
-5. **Output GROMACS nativo e rilevamento versione — NUOVO**
-6. [Setup e installazione](#setup-e-installazione)
-7. [Verifica e test](#verifica-e-test)
-8. [Fonti e licenze](#fonti-e-licenze)
+- **C-gui Quick Bilayer Builder** (`cgui-studio` on disk) — local web GUI (FastAPI + Svelte 5 + Tailwind + vendored NGL) over the official CHARMM-GUI REST API (Quick Bilayer). Batch construction of lipid compositions with provenance manifests and GROMACS-ready output.
+- **scripts/make_bilayer.py** — local **all-atom molecular builder** (no CHARMM-GUI server needed): builds bilayers, systems with proteins, nucleic acids (DNA/RNA), small molecules and small complexes, and runs GROMACS directly (editconf, solvate, grompp, mdrun).
 
 ---
 
-## Struttura del progetto
+## Table of contents
+
+1. [Project structure](#project-structure)
+2. [Web GUI (cgui-studio)](#web-gui-cgui-studio)
+3. [Local all-atom builder (`scripts/make_bilayer.py`) — NEW](#local-all-atom-builder-scriptsmake_bilayerpy---new)
+4. [Molecule support: lipids, proteins, nucleic acids, small molecules — NEW](#molecule-support---new)
+5. [Native GROMACS output and version detection — NEW](#native-gromacs-output-and-version-detection---new)
+6. [Setup and installation](#setup-and-installation)
+7. [Tests and verification](#tests-and-verification)
+8. [Sources and licenses](#sources-and-licenses)
+
+---
+
+## Project structure
 
 ```
 cgui-studio/
-├── scripts/make_bilayer.py          # builder all-atom locale (GROMACS-ready)
+├── scripts/make_bilayer.py          # local all-atom builder (GROMACS-ready)
 ├── src/cgui_studio/                 # core CLI + web GUI
-│   ├── client.py                    # client API CHARMM-GUI (login, submit, status, download, wait)
+│   ├── client.py                    # CHARMM-GUI API client (login, submit, status, download, wait)
 │   ├── models.py                    # Spec, JobStatus, JobRecord
-│   ├── paths.py                     # percorsi XDG, token cache, store
-│   ├── store.py                     # SQLite WAL per job
-│   ├── spec.py                      # TOML singolo/multiplo
-│   ├── webui.py                     # app FastAPI (wizard Quick Bilayer, NGL, job live, mock-first)
-│   └── webmock.py                   # FakeClient per test offline (mock-first)
-├── web/                             # frontend Svelte 5 + Tailwind + NGL vendored
+│   ├── paths.py                     # XDG paths, token cache, store
+│   ├── store.py                     # SQLite WAL job store
+│   ├── spec.py                      # single/multiple TOML spec
+│   ├── webui.py                     # FastAPI app (Quick Bilayer wizard, NGL, live jobs, mock-first)
+│   └── webmock.py                   # FakeClient for offline tests (mock-first)
+├── web/                             # Svelte 5 + Tailwind + vendored NGL frontend
 │   ├── src/
-│   │   ├── App.svelte               # wizard Singolo/Batch, tabella job, confronto 3D affiancato
-│   │   ├── Molecule.svelte          # vista 3D NGL con controlli stile, reset, acqua/ioni
-│   │   ├── SpecSketch.svelte        # schema composizione lipidi in tempo reale
-│   │   ├── BatchPanel.svelte        # coda multi-composizione sequenziale
-│   │   ├── Launcher.svelte          # builder all-atom: 4-step wizard, preset, metriche, log, salva/carica JSON
-│   │   └── api.js                   # chiamate API
+│   │   ├── App.svelte               # Singolo/Batch wizard, job table, side-by-side 3D comparison
+│   │   ├── Molecule.svelte          # NGL 3D view with style controls, reset, water/ions
+│   │   ├── SpecSketch.svelte        # real-time lipid composition schema
+│   │   ├── BatchPanel.svelte        # sequential multi-composition queue
+│   │   ├── Launcher.svelte          # all-atom builder: 4-step wizard, presets, metrics, logs, save/load JSON
+│   │   └── api.js                   # API calls
 │   └── public/vendor/ngl.js         # NGL View 2.5.0 MIT, vendored (no CDN)
-├── tests/                           # pytest (117 test)
-├── results/                         # output dei job (uno per job)
-├── literature/                      # PDF e note bibliografiche
+├── tests/                           # pytest (117 tests)
+├── results/                         # job outputs (one per job)
+├── literature/                      # PDFs and bibliographic notes
 ├── README.md
 ├── SOURCES.md
-└── AGENTS.md                        # istruzioni per OpenCode
+└── AGENTS.md                        # OpenCode instructions
 ```
 
 ---
 
-## GUI web — C-gui Quick Bilayer Builder
+## Web GUI — C-gui Quick Bilayer Builder
 
-App web locale su `http://127.0.0.1:8756` (porta configurabile):
+Local web app at `http://127.0.0.1:8756` (configurable port):
 
 ```bash
 uv run cgui serve --port 8756
-# oppure in modalità MOCK (nessun server CHARMM-GUI richiesto, test offline):
+# or in MOCK mode (no CHARMM-GUI server needed, offline testing):
 CGUI_MOCK=1 uv run cgui serve --port 8756
 ```
 
-Funzionalità:
+Features:
 
-- **Wizard Quick Bilayer** (tab Singolo): composizione lipidi (`POPC=64`, `POPC=48;CHOL=16`), margine, wdist, ioni (KCl/NaCl), membrane_only, run_ffconverter
-- **Launcher builder all-atom** (4 step: Tipo → Composizione → Ambiente → Riepilogo): catalogo 411 lipidi CHARMM36 con ricerca live e filtri per categoria, foglietti simmetrici o asimmetrici, preset membrane (1 click), controlli fisici (box, centratura, solvente, ioni), metriche post-build (spessore P-P, APL, acqua/lipide), log GROMACS, salva/carica composizione in JSON
-- **Batch multi-composizione** (tab Batch): coda locale sequenziale (una riga alla volta), stati per riga, auto-fetch opzionale, stop/riprendi, inizializzazione pre-compilata dal wizard
-- **Vista 3D NGL** con spacefill, ball+stick, licorice, cartoon; toggle acqua/ioni; reimposta vista; hint mouse; confronto affiancato di due strutture
-- SpecSketch: schema composizione live
-- NGL vendored in `web/public/vendor/` (no CDN, nessuna dipendenza esterna)
+- **Quick Bilayer wizard** (Singolo tab): lipid composition (`POPC=64`, `POPC=48;CHOL=16`), margin, wdist, ions (KCl/NaCl), membrane_only, run_ffconverter
+- **All-atom builder launcher** (4 steps: Type → Composition → Environment → Summary): 411 CHARMM36 lipid catalog with live search and category filters, symmetric or asymmetric leaflets, membrane presets (1 click), physical controls (box, centering, solvent, ions), post-build metrics (P-P thickness, APL, water/lipid), GROMACS logs, save/load composition as JSON
+- **Batch multi-composition** (Batch tab): local sequential queue (one row at a time), per-row states, optional auto-fetch, stop/resume, wizard pre-fill initialization
+- **NGL 3D view** with spacefill, ball+stick, licorice, cartoon; water/ions toggle; reset view; mouse hints; side-by-side comparison of two structures
+- SpecSketch: live composition diagram
+- NGL vendored in `web/public/vendor/` (no CDN, no external dependencies)
 
 ---
 
-## Builder all-atom locale (`scripts/make_bilayer.py`)
+## Local all-atom builder (`scripts/make_bilayer.py`)
 
-Costruisce sistemi molecolari **in locale**, senza server CHARMM-GUI e senza attesa in coda. Output pronto per GROMACS (`.pdb`, `.top`, `.mdp`) e pronto per caricamento in visualizzatori (NGL, PyMOL, VMD).
+Builds molecular systems **locally**, without a CHARMM-GUI server and without queue waiting. Output ready for GROMDS (`.pdb`, `.top`, `.mdp`) and ready to load in visualizers (NGL, PyMOL, VMD).
 
-### Comando
+### Command
 
 ```bash
-# dalla directory cgui-studio:
+# from the cgui-studio directory:
 python3 scripts/make_bilayer.py --spec "POPC=64;CHOL=16" --run-gmx
 ```
 
-oppure con preset:
+or with presets:
 
 ```bash
 python3 scripts/make_bilayer.py --preset plasma --box-x 10 --box-y 10 --box-z 10 --run-gmx
 ```
 
-oppure foglietti indipendenti:
+or independent leaflets:
 
 ```bash
 python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POPI=2;DOPS=2" --lower "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POPI=2;DOPS=2" --run-gmx
 ```
 
-### Argomenti CLI
+### CLI arguments
 
-| Argomento | Valore default | Significato |
-|-----------|---------------|-------------|
-| `--spec` | — | Composizione es. `POPC=64;CHOL=16` (entrambi i fogli) |
-| `--upper` | — | Composizione foglio superiore |
-| `--lower` | — | Composizione foglio inferiore |
-| `--membtype` | — | Preset membrane del server (ignora upper/lower) |
-| `--preset` | — | Preset locale: `plasma`, `er`, `mito`, `popc` (ignora spec/upper/lower) |
-| `--margin` | 20.0 | Margin attorno al sistema (Å) |
-| `--wdist` | 1.0 | Distanza teste-ioni (Å) |
-| `--ion-conc` | 0.15 | Concentrazione sale (M) |
-| `--ion-type` | KCl | Tipo sale (`KCl`, `NaCl`) |
-| `--box-x` | 12.0 | Dimensione box X (nm) |
-| `--box-y` | 12.0 | Dimensione box Y (nm) |
-| `--box-z` | 12.0 | Dimensione box Z (nm) |
-| `--center` / `--no-center` | centrato | Centra la struttura a (0,0,0) |
-| `--layout` | fluid | `fluid` (mosaico casuale, scienza di default) o `planar` (debug CLI) |
-| `--solvent` | water | `water` (acqua TIP3P) o `none` |
-| `--ions` | KCl | `KCl`, `NaCl` o `none` |
-| `--output` | results | Directory base output |
-| `--run-gmx` | — | Esegue GROMACS: `pdb2gmx` (topologia completa CHARMM36) → `editconf` → solvate → genion → grompp. La minimizzazione mdrun è opt-in (`--minimize`) perché su laptop può superare i 5 min |
-| `--minimize` / `--min-timeout` | off / 900 | Esegue anche `gmx mdrun` (steep) con timeout in secondi |
+| Argument | Default | Meaning |
+|----------|---------|---------|
+| `--spec` | — | Composition e.g. `POPC=64;CHOL=16` (both leaflets) |
+| `--upper` | — | Upper leaflet composition |
+| `--lower` | — | Lower leaflet composition |
+| `--membtype` | — | Server membrane preset (ignores upper/lower) |
+| `--preset` | — | Local preset: `plasma`, `er`, `mito`, `popc` (ignores spec/upper/lower) |
+| `--margin` | 20.0 | Margin around system (Å) |
+| `--wdist` | 1.0 | Headgroup-ion distance (Å) |
+| `--ion-conc` | 0.15 | Salt concentration (M) |
+| `--ion-type` | KCl | Salt type (`KCl`, `NaCl`) |
+| `--box-x` | 12.0 | Box X dimension (nm) |
+| `--box-y` | 12.0 | Box Y dimension (nm) |
+| `--box-z` | 12.0 | Box Z dimension (nm) |
+| `--center` / `--no-center` | centered | Centers structure at (0,0,0) |
+| `--layout` | fluid | `fluid` (random mosaic, scientific default) or `planar` (CLI debug) |
+| `--solvent` | water | `water` (TIP3P) or `none` |
+| `--ions` | KCl | `KCl`, `NaCl` or `none` |
+| `--output` | results | Base output directory |
+| `--run-gmx` | — | Runs GROMACS: `pdb2gmx` (full CHARMM36 topology) → `editconf` → solvate → genion → grompp. Minimization mdrun is opt-in (`--minimize`) because on a laptop it can exceed 5 min |
+| `--minimize` / `--min-timeout` | off / 900 | Also runs `gmx mdrun` (steep) with timeout in seconds |
 | `--build-type` | lipid | `lipid`, `protein`, `dna`, `rna`, `small-mol` |
-| `--pdb` | — | ID PDB (es. `7CFN`) o file PDB: la proteina viene orientata, pre-processata con `gmx pdb2gmx` (CHARMM36) e inserita al centro del bilayer (modulo `scripts/embed_protein.py`) |
-| `--pdb-chain` | tutte | Chain da mantenere (es. `R` per GPBAR1 in 7CFN) |
-| `--pdb-prefer` | OPM | Orientamento: `OPM`, `PPM`, `none` (passthrough: il mid del dominio TM va su z=0) |
-| `--pdb-fix-missing` | off | Converte a GLY i residui con side chain incompleta (tipico cryo-EM) per far passare pdb2gmx |
-| `--dna` | — | Sequenza DNA (es. ATGC) |
-| `--rna` | — | Sequenza RNA (es. AUGC) |
-| `--small-mol` | — | File PDB/SDF di una small molecule |
+| `--pdb` | — | PDB ID (e.g. `7CFN`) or PDB file: protein is oriented, pre-processed with `gmx pdb2gmx` (CHARMM36) and centered in the bilayer (module `scripts/embed_protein.py`) |
+| `--pdb-chain` | all | Chain(s) to keep (e.g. `R` for GPBAR1 in 7CFN) |
+| `--pdb-prefer` | OPM | Orientation: `OPM`, `PPM`, `none` (passthrough: TM domain mid-plane at z=0) |
+| `--pdb-fix-missing` | off | Converts incomplete side chains to GLY (typical cryo-EM) so pdb2gmx passes |
+| `--dna` | — | DNA sequence (e.g. ATGC) |
+| `--rna` | — | RNA sequence (e.g. AUGC) |
+| `--small-mol` | — | PDB/SDF small molecule file |
 
-### Caratteristiche scientifiche
+### Scientific features
 
-- **Mescolamento laterale reale**: le specie sono assegnate casualmente alle posizioni nel foglietto (seed riproducibile), non a settori contigui — come in una membrana vera
-- **APL reali**: area per lipide per composizione (POPC 0.683, DOPC 0.725, CHL1 0.28, PSM 0.53, TOCL 1.20 nm²…) per dimensionare i foglietti con densità fisica
-- **Bilanciamento cariche**: calcolo carica netta dai lipidi (tramite lipid.rtp CHARMM36) e aggiunta automatica di ioni via `gmx genion` (neutralizzazione + concentrazione target)
-- **Geometrie sterane dedicate**: colesterolo CHL1 con 4 anelli fused (OH verso acqua, catena verso core), non catene generiche
-- **PDB coerente col .top**: nomi atomi da lipid.rtp (evita mismatch grompp)
-- **Spessore P-P volumetrico**: D_B calcolato dai volumi CHARMM36 dei lipidi con correzione sterolo (×1.2), non da costanti fisse — verificato POPC 3.78 nm, POPC+CHL1 3.95 nm (range sperimentale 3.7–4.1)
-- **Proteina nel bilayer (`--pdb`)**: orientamento OPM/PPM/passthrough, `pdb2gmx` con termini chamati charmm36 + `cmap`, split topology per chain, carica netta reale letta dal .itp e compensata da genion (8 CL⁻ extra per GPBAR1 +8 e), centraggio del dominio TM su z=0, `[ molecules ]` con proteina in prima riga (ordine coerente col PDB)
-- **Run "grompp-ready" pronto**: senza `--minimize` il flusso GROMACS termina con `minim.tpr` in ~2 min su laptop (E7440), con `metrics.json` sempre scritta
+- **Real lateral mixing**: species are randomly assigned to leaflet positions (reproducible seed), not in contiguous sectors — like a real membrane
+- **Real APL**: area per lipid per composition (POPC 0.683, DOPC 0.725, CHL1 0.28, PSM 0.53, TOCL 1.20 nm²…) to size leaflets with physical density
+- **Charge balancing**: net charge from lipids (via CHARMM36 lipid.rtp) and automatic ion addition via `gmx genion` (neutralization + target concentration)
+- **Dedicated sterane geometries**: cholesterol CHL1 with 4 fused rings (OH toward water, chain toward core), not generic chains
+- **PDB consistent with .top**: atom names from lipid.rtp (avoids grompp mismatch)
+- **Volumetric P-P thickness**: D_B calculated from CHARMM36 lipid volumes with sterol correction (×1.2), not fixed constants — verified POPC 3.78 nm, POPC+CHL1 3.95 nm (experimental range 3.7–4.1)
+- **Protein in bilayer (`--pdb`)**: OPM/PPM/passthrough orientation, `pdb2gmx` with charmm36 + cmap terms, split topology per chain, real net charge read from .itp and compensated by genion (8 extra Cl⁻ for GPBAR1 +8 e), TM domain centered at z=0, `[ molecules ]` with protein on first line (order consistent with PDB)
+- **"grompp-ready" run**: without `--minimize` the GROMACS flow ends with `minim.tpr` in ~2 min on a laptop (E7440), with `metrics.json` always written
 
-### Output GROMACS nativo
+### Native GROMACS output
 
-| File | Contenuto |
-|------|-----------|
-| `system/step1_pdbreader.pdb` | Struttura bilayer/sistema (PDB; coordinate atomiche in **Å**, standard PDB) |
-| `system/topol.top` | Topologia GROMACS (CHARMM36) con position_restraints sulle teste polari |
-| `system/minim.mdp` | Parametri minimizzazione energia (steepest descent) |
-| `system/boxed.gro` | Struttura con box (dopo `gmx editconf`) |
-| `system/solvated.gro` | Sistema solvatato (dopo `gmx solvate`) |
-| `system/ionized.gro` | Sistema con ioni aggiunti (dopo `gmx genion`) |
-| `system/minim.tpr` | Input pronto per la simulazione (dopo `gmx grompp`) |
-| `system/minim.trr/.gro/.edr/.log` | Output minimizzazione (dopo `gmx mdrun`) |
-| `system/equilib_nvt.mdp` | Equilibratura NVT 50 ps con posres |
-| `system/equilib_npt.mdp` | Equilibratura NPT 50 ps semiisotropa con posres |
-| `system/production.mdp` | Produzione 100 ns libera |
-| `system/equil.sh` | Script shell per eseguire NVT → NPT → produzione |
-| `results/…/manifest.json` | SHA256 di ogni file per provenance |
-| `results/…/metrics.json` | Metriche post-build (spessore P-P, APL, acqua/lipide, carica) |
+| File | Content |
+|------|---------|
+| `system/step1_pdbreader.pdb` | Bilayer/system structure (PDB; atomic coordinates in **Å**, PDB standard) |
+| `system/topol.top` | GROMACS topology (CHARMM36) with position restraints on polar heads |
+| `system/minim.mdp` | Energy minimization parameters (steepest descent) |
+| `system/boxed.gro` | Structure with box (after `gmx editconf`) |
+| `system/solvated.gro` | Solvated system (after `gmx solvate`) |
+| `system/ionized.gro` | System with ions added (after `gmx genion`) |
+| `system/minim.tpr` | Input ready for simulation (after `gmx grompp`) |
+| `system/minim.trr/.gro/.edr/.log` | Minimization output (after `gmx mdrun`) |
+| `system/equilib_nvt.mdp` | NVT equilibration 50 ps with posres |
+| `system/equilib_npt.mdp` | NPT equilibration 50 ps semiisotropic with posres |
+| `system/production.mdp` | Free production 100 ns |
+| `system/equil.sh` | Shell script to run NVT → NPT → production |
+| `results/…/manifest.json` | SHA256 of each file for provenance |
+| `results/…/metrics.json` | Post-build metrics (P-P thickness, APL, water/lipid, charge) |
 
-Se `--run-gmx` è specificato, lo script esegue automaticamente:
+When `--run-gmx` is specified, the script automatically executes:
 
-1. `gmx pdb2gmx -ff charmm36 -water tip3p -ignh` — genera la topologia completa
-   (`[bonds]`, `[angles]`, `[dihedrals]`, `[cmap]`) dal PDB + charmm36 jul2022
-   (se fallisce, si procede con un top parziale e banner di avviso)
-2. `gmx editconf` — centra e imposta la box
-3. `gmx solvate` — aggiunge acqua TIP3P
-4. `gmx grompp` (pre-ioni) — prepara input per genion
-5. `gmx genion` — aggiunge ioni (neutralizzazione + concentrazione)
-6. `gmx grompp` — prepara l'input per la minimizzazione
-7. `gmx mdrun` — esegue la minimizzazione energetica
+1. `gmx pdb2gmx -ff charmm36 -water tip3p -ignh` — generates the full topology (`[bonds]`, `[angles]`, `[dihedrals]`, `[cmap]`) from PDB + charmm36 jul2022 (if it fails, proceeds with partial topology and warning banner)
+2. `gmx editconf` — centers and sets box
+3. `gmx solvate` — adds TIP3P water
+4. `gmx grompp` (pre-ions) — prepares input for genion
+5. `gmx genion` — adds ions (neutralization + concentration)
+6. `gmx grompp` — prepares minimization input
+7. `gmx mdrun` — runs energy minimization
 
-### Rilevamento versione GROMACS
+### GROMACS version detection
 
-Lo script rileva automaticamente la versione di GROMACS installata (`gmx --version`) e:
-- Mostra la versione rilevata
-- Verifica compatibilità (minimo 2018 raccomandato)
-- Avvisa se la versione è molto recente o troppo vecchia
+The script automatically detects the installed GROMACS version (`gmx --version`) and:
 
-### Risorse persistenti
+- Shows the detected version
+- Checks compatibility (minimum 2018 recommended)
+- Warns if the version is very new or too old
 
-Il file `lipid.rtp` (CHARMM36) e il tarball `charmm36.tgz` (force field) sono memorizzati in `~/.local/share/cgui-studio/` (non in `/tmp`, che viene svuotato al riavvio). Scaricati automaticamente al primo uso se mancanti.
+### Persistent resources
+
+The `lipid.rtp` file (CHARMM36) and the `charmm36.tgz` tarball (force field) are stored in `~/.local/share/cgui-studio/` (not in `/tmp`, which is cleared on reboot). Downloaded automatically on first use if missing.
 
 ---
 
-## Setup e installazione
+## Setup and installation
 
-### Prerequisiti
+### Prerequisites
 
-- **Python 3.12+** (consigliato: miniforge/conda in ambiente dedicato, NON pip di sistema)
-- **GROMACS 2018+** (opzionale, per esecuzione locale delle simulazioni)
-- **Node.js 20+** (per il frontend, opzionale se usi solo lo script Python)
+- **Python 3.12+** (recommended: miniforge/conda in a dedicated environment, NOT system pip)
+- **GROMACS 2018+** (optional, for local simulation execution)
+- **Node.js 20+** (for the frontend, optional if you only use the Python script)
 
-### Installazione ambiente Python (conda/miniforge)
+### Python environment installation (conda/miniforge)
 
 ```bash
-# Installa miniforge se non presente
+# Install miniforge if not present
 curl -L -o miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
 bash miniforge.sh -b -p ~/miniforge3
 
-# Crea ambiente dedicato
+# Create dedicated environment
 ~/miniforge3/bin/conda create -n cgui-builder python=3.12 -y
 ~/miniforge3/bin/conda activate cgui-builder
 
-# Installa dipendenze
+# Install dependencies
 ~/miniforge3/bin/conda install -c conda-forge gromacs mdtraj MDAnalysis -y
 ```
 
-### Installazione progetto
+### Project installation
 
 ```bash
 cd /home/giorgio/Documenti/cgui-studio
 uv run python scripts/make_bilayer.py --help
 ```
 
-Per la GUI web:
+For the web GUI:
 
 ```bash
 cd web && PATH=/home/giorgio/.local/node24/bin:$PATH npm install
@@ -228,46 +227,46 @@ CGUI_MOCK=1 uv run cgui serve --port 8756
 
 ---
 
-## Verifica e test
+## Tests and verification
 
 ```bash
 cd /home/giorgio/Documenti/cgui-studio
 
-# Test Python
+# Python tests
 uv run pytest -q
 
 # Lint
 uv run ruff check .
 
-# Build frontend
+# Frontend build
 cd web && PATH=/home/giorgio/.local/node24/bin:$PATH npm run build
 cd ..
 
-# Test builder locale (membrana carica, testa genion + metriche)
+# Local builder test (charged membrane, tests genion + metrics)
 python3 scripts/make_bilayer.py --upper "POPC=8;POPS=8" --lower "POPC=8;POPS=8" --box-x 9 --box-y 9 --box-z 9 --run-gmx
 
-# Test preset plasma
+# Plasma preset test
 python3 scripts/make_bilayer.py --preset plasma --box-x 10 --box-y 10 --box-z 10 --run-gmx
 ```
 
 ---
 
-## Fonti e licenze
+## Sources and licenses
 
-Vedi [`SOURCES.md`](SOURCES.md).
+See [`SOURCES.md`](SOURCES.md).
 
-### Licenze principali
+### Main licenses
 
 - **cgui-studio**: MIT
-- **C-gui Quick Bilayer Builder**: versione 1.0-alpha (prima release pubblica)
+- **C-gui Quick Bilayer Builder**: version 1.0-alpha (first public release)
 - **NGL View**: MIT (vendored in `web/public/vendor/`)
-- **CHARMM-GUI**: uso accademico, citazione obbligatoria
-- **CHARMM36**: accademico gratuito con registrazione (MacKerell Lab)
+- **CHARMM-GUI**: academic use, citation required
+- **CHARMM36**: free academic use with registration (MacKerell Lab)
 
 ---
 
-## Note importanti
+## Important notes
 
-- La doc pubblica CHARMM-GUI copre solo General + Quick Bilayer. PDB Reader non è documentato pubblicamente ma è richiesto per embeddare proteine.
-- Il token CHARMM-GUI scade: rifare `cgui login` se ricevi errore 403.
-- Per calcoli di produzione (MD lunghi), usa un cluster o server dedicato: questo strumento è ottimizzato per sistemi piccoli e test rapidi su workstation locale.
+- The public CHARMM-GUI documentation covers only General + Quick Bilayer. PDB Reader is not publicly documented but is required for embedding proteins.
+- The CHARMM-GUI token expires: re-run `cgui login` if you get error 403.
+- For production calculations (long MD runs), use a cluster or dedicated server: this tool is optimized for small systems and quick tests on a local workstation.
