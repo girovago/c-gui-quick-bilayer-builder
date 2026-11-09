@@ -229,6 +229,18 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     def ping() -> dict[str, Any]:
         return {"ok": True, "mock": app.state.mock}
 
+    @app.get("/api/pdbs")
+    def list_pdbs() -> list[dict[str, str]]:
+        """Elenca i file PDB disponibili in results/ (ricorsivo), per scegliere
+        una struttura già generata senza doverla ricaricare."""
+        base = default_results_dir()
+        found: list[dict[str, str]] = []
+        if base.exists():
+            for p in sorted(base.rglob("*.pdb")):
+                rel = p.relative_to(base)
+                found.append({"name": p.name, "path": str(rel), "abs": str(p)})
+        return found
+
     # ------------------------------------------------------------- auth CHARMM-GUI
     def _mask(email: str) -> str:
         name, _, dom = email.partition("@")
@@ -630,12 +642,25 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             raise HTTPException(500, "conda non trovato in ~/miniforge3/bin/conda")
 
         uploads_dir = default_results_dir() / "uploads"
-        membrane_path = uploads_dir / payload.membrane_pdb_file_name
-        receptor_path = uploads_dir / payload.receptor_pdb_file_name
-        if not membrane_path.exists():
-            raise HTTPException(404, f"file membrana non trovato: {membrane_path}")
-        if not receptor_path.exists():
-            raise HTTPException(404, f"file recettore non trovato: {receptor_path}")
+
+        def _find_pdb(name: str) -> Path:
+            # Prima prova in uploads/ (file appena caricati)
+            cand = uploads_dir / name
+            if cand.exists():
+                return cand
+            # Poi cerca ricorsivamente in tutta results/ (strutture vecchie)
+            base = default_results_dir()
+            if base.exists():
+                for p in base.rglob(name):
+                    if p.is_file():
+                        return p
+            raise FileNotFoundError(name)
+
+        try:
+            membrane_path = _find_pdb(payload.membrane_pdb_file_name)
+            receptor_path = _find_pdb(payload.receptor_pdb_file_name)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, f"file PDB non trovato: {exc}")
 
         out_dir = default_results_dir() / (payload.out_dir or "results")
         cmd = [

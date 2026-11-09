@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from "svelte";
   import { LIPID_CATALOG, LIPID_CATEGORIES } from "./lipidCatalog.js";
 
   const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy } = $props();
@@ -14,8 +15,22 @@
   let search = $state(""), catFilter = $state("");
   let membraneFiles = null, receptorFiles = null;
   let embedErr = $state(""), embedBusy = $state(false);
+  let existingPdbs = $state([]);
+  let selectedExistingMembrane = $state("");
+  let selectedExistingReceptor = $state("");
   let proteinPdbId = $state(""), proteinPdbFile = null, dnaSequence = $state(""), rnaSequence = $state(""), smallMolFile = null;
   let boxX = $state(12), boxY = $state(12), boxZ = $state(12), centerStructure = $state(true), solvent = $state("water"), ions = $state("KCl");
+
+  async function loadPdbs() {
+    try {
+      const res = await fetch("/api/pdbs");
+      if (res.ok) existingPdbs = await res.json();
+    } catch { /* silenzioso */ }
+  }
+
+  onMount(() => {
+    loadPdbs();
+  });
 
   const PRESETS = { plasma: { label: "Plasma (CHOL 35%)", upper: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 }, lower: { POPC: 14, POPE: 6, PSM: 8, CHOL: 20, POPS: 4, POPI: 2, DOPS: 2 } }, er: { label: "ER (PE alto)", upper: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 }, lower: { POPC: 22, POPE: 18, CHOL: 3, POPI: 6, POPS: 3 } }, mito: { label: "Mitocondri (TOCL)", upper: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 }, lower: { POPC: 18, POPE: 24, TOCL1: 4, POPI: 3, POPA: 3 } }, popc: { label: "POPC puro", upper: { POPC: 64 }, lower: { POPC: 64 } } };
   const chargeColor = $derived(buildMetrics ? (buildMetrics.net_lipid_charge_e !== 0 ? "text-red-600" : "text-zinc-600") : "text-zinc-600");
@@ -44,26 +59,33 @@
   async function embedReceptor() {
     embedErr = ""; embedBusy = true;
     try {
+      let mName, rName;
       const mf = membraneFiles?.[0], rf = receptorFiles?.[0];
-      if (!mf || !rf) { embedErr = "Seleziona entrambi i file PDB"; return; }
-
-      // 1) Salva entrambi i file sul server
-      async function upload(file) {
-        const text = await file.text();
-        const res = await fetch("/api/upload-pdb", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file_name: file.name, content: text }),
-        });
-        if (!res.ok) {
-          const d = await res.json().catch(() => ({}));
-          throw new Error(d.detail || `upload fallito ${res.status}`);
+      if (mf && rf) {
+        // 1) Salva entrambi i file sul server
+        async function upload(file) {
+          const text = await file.text();
+          const res = await fetch("/api/upload-pdb", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ file_name: file.name, content: text }),
+          });
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            throw new Error(d.detail || `upload fallito ${res.status}`);
+          }
+          const d = await res.json();
+          return d.file_name;
         }
-        const d = await res.json();
-        return d.file_name;
+        mName = await upload(mf);
+        rName = await upload(rf);
+      } else if (selectedExistingMembrane && selectedExistingReceptor) {
+        mName = selectedExistingMembrane;
+        rName = selectedExistingReceptor;
+      } else {
+        embedErr = "Scegli due file (upload o tendina PDB esistenti)";
+        return;
       }
-      const mName = await upload(mf);
-      const rName = await upload(rf);
 
       // 2) Chiama embed-in-membrane
       const res = await fetch("/api/embed-in-membrane", {
@@ -214,11 +236,18 @@
           <div class="mt-6 rounded-lg bg-indigo-50 border border-indigo-200 p-4">
             <div class="flex items-center gap-2 mb-2"><span class="font-semibold text-indigo-800 text-xs">🎯 Opzione 2 — Inserisci recettore in membrana esistente</span></div>
             <p class="text-xs text-indigo-700 mb-3">Carica il PDB della membrana già generata e il PDB del recettore per inserirlo nella membrana.</p>
+            {#if existingPdbs.length > 0}
+              <div class="grid grid-cols-2 gap-3 mb-3">
+                <div><label class="block text-[10px] text-indigo-600 mb-1">Membrana esistente</label><select bind:value={selectedExistingMembrane} class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs"><option value="">— scegli —</option>{#each existingPdbs as p (p.path)}<option value={p.path}>{p.name}</option>{/each}</select></div>
+                <div><label class="block text-[10px] text-indigo-600 mb-1">Recettore esistente</label><select bind:value={selectedExistingReceptor} class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs"><option value="">— scegli —</option>{#each existingPdbs as p (p.path)}<option value={p.path}>{p.name}</option>{/each}</select></div>
+              </div>
+              <p class="text-[10px] text-indigo-500 mb-3">o carica file nuovi:</p>
+            {/if}
             <div class="grid grid-cols-2 gap-3 mb-3">
               <div><label class="block text-[10px] text-indigo-600 mb-1">Membrana (PDB)</label><input type="file" accept=".pdb" class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs" bind:files={membraneFiles} /></div>
               <div><label class="block text-[10px] text-indigo-600 mb-1">Recettore (PDB)</label><input type="file" accept=".pdb" class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs" bind:files={receptorFiles} /></div>
             </div>
-            <button type="button" disabled={!membraneFiles?.length || !receptorFiles?.length} class="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50" onclick={embedReceptor}>
+            <button type="button" disabled={embedBusy || (!membraneFiles?.length && !selectedExistingMembrane) || (!receptorFiles?.length && !selectedExistingReceptor)} class="w-full rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50" onclick={embedReceptor}>
               {embedBusy ? "Inserimento in corso…" : "▶ Inserisci recettore nella membrana"}
             </button>
             {#if embedErr}
