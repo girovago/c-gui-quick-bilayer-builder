@@ -77,6 +77,10 @@ Questo progetto **non include** codice copyleft da progetti terzi. I file `lipid
 - **MacKerell CGenFF**: https://mackerell.umaryland.edu/charmm_ff.shtml — force field CHARMM36 completo
 - **RCSB PDB**: https://www.rcsb.org/ — database strutture proteiche e lipidi (PDB ID per lipidi singoli non sempre disponibili)
 - **RCSB PDB Search API**: https://search.rcsb.org/rcsbsearch/v2/query — API per ricerca strutture
+- **CHARMM36 jul2022** (`charmm36-jul2022.ff`): distribuzione GROMACS del force field CHARMM36 (file `lipid.rtp`, `lipid.hdb`, `ffbonded.itp`, `forcefield.itp`, `tip3p.itp`, `ions.itp`). Usato da `gmx pdb2gmx` per generare la topologia completa (`[bonds]`, `[angles]`, `[dihedrals]`, `[cmap]`) nel builder all-atom locale.
+
+### Convenzione unità (importante)
+Il PDB di output (`step1_pdbreader.pdb`) scrive le coordinate atomiche in **Ångström (Å)**, standard PDB; il calcolo interno del builder resta in nanometri (nm). I consumatori del PDB (`_heavy_clash_count`, `compute_metrics`, embed proteina) dividono per 10 prima dell'uso. I file GROMACS (`.gro`, `.top`, `.mdp`) restano in nm, come richiesto da GROMACS.
 
 ---
 

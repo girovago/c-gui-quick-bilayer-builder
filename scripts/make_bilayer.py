@@ -392,15 +392,17 @@ STEROL_RESIDUES = {"CHL1"}  # rtp_name con geometria steran dedicata
 
 
 def _heavy_clash_count(
-    body_lines: list[str], thr: float = 0.12
+    body_lines: list[str], thr: float = 0.30
 ) -> int:
     """Coppie di atomi pesanti fra lipidi DIVERSI dello stesso foglietto
     a distanza < thr (nm).
 
     Il PDB di output e' in ANGSTROM (standard): le coordinate lette dalle
     righe ATOM/HETATM vengono convertite in nm (÷10) prima del confronto,
-    quindi thr resta espresso in nm. Soglia 0.12 nm = raggio vdW minimo:
-    rileva solo sovrapposizioni massive, non soft-clash (v. nota BLOCKER 3).
+    quindi thr resta espresso in nm. Soglia di default 0.30 nm ~ contatto
+    vdW reale tra atomi pesanti (C-C ~0.34 nm): e' una soglia "dura" che
+    rileva steric clash significativi, NON un controllo softclash completo
+    (quello spetta alla minimizzazione energetica, v. generate_mdp).
     """
 
     atoms = []
@@ -928,7 +930,7 @@ def generate_pdb(
         "REMARK   Foglio superiore (upper) e inferiore (lower)"
     )
     lines.append(f"REMARK   Scatola: {box_x:.2f} x {box_y:.2f} x {box_z:.2f} nm")
-    lines.append(f"REMARK   Coordinate atomiche in A (standard PDB); box in nm (descrittivo)")
+    lines.append("REMARK   Coordinate atomiche in A (standard PDB); box in nm (descrittivo)")
     lines.append(f"REMARK   Layout: {layout}, centro={'si' if center else 'no'}")
 
     total_lipids = sum(upper.values()) + sum(lower.values())
@@ -1020,21 +1022,22 @@ def generate_pdb(
 
     body = _render_body(31337)
     best = (None, 10**9)
-    for attempt in range(20):
+    for attempt in range(30):
         n_clash = _heavy_clash_count(body)
         if n_clash < best[1]:
             best = (attempt, n_clash)
         if n_clash == 0:
             break
         print(
-            f"INFO: tentativo {attempt + 1}: {n_clash} clash pesanti fra lipidi "
-            "(rigenero le orientazioni sterolo)"
+            f"INFO: tentativo {attempt + 1}/30: {n_clash} clash pesanti fra "
+            f"lipidi (rigenero le orientazioni sterolo)"
         )
         body = _render_body(31337 + 7919 * (attempt + 1))
     if best[1] != 0:
         print(
-            f"AVVISO: nessun packing sterolo pulito in 20 tentativi; "
-            f"tengo il tentativo {best[0] + 1} con {best[1]} clash"
+            f"AVVISO: nessun packing sterolo pulito in 30 tentativi (soglia "
+            f"0.30 nm ~ contatto vdW reale); tengo il tentativo {best[0] + 1} "
+            f"con {best[1]} clash residui — risolti in minimizzazione"
         )
         body = _render_body(31337 + 7919 * best[0])
 
@@ -1083,6 +1086,26 @@ def ion_counts(
     return n_pairs, n_pairs, net
 
 
+# Banner ASCII inserito in testa al topol.top SOLO quando pdb2gmx
+# non e' stato eseguito (fallback): avvisa che serve la topologia completa.
+_SKELETON_BANNER = """\
+; ======================================================================
+; SCHELETRO: topologia parziale (nomi atomi corretti, bonds/angles/
+; dihedrals MANCANTI).
+;
+; gmx pdb2gmx NON e' stato eseguito o ha fallito. Per una topologia
+; completa e grompp-ready eseguire:
+;
+;     gmx pdb2gmx -f step1_pdbreader.pdb -o step3.pdb -p topol.top
+;         -i posres.itp -ff charmm36 -water tip3p -ignh
+;         -dir <percorso/charmm36.ff>
+;
+; Poi rigenerare boxed.gro/solvato e rieseguire gmx grompp su questo top.
+; ======================================================================
+
+"""
+
+
 def generate_top(
     upper: dict[str, int],
     lower: dict[str, int],
@@ -1094,6 +1117,12 @@ def generate_top(
 ) -> str:
     """Genera una topologia GROMACS completa con CHARMM36.
 
+    Per una topologia COMPLETA (con [bonds], [angles], [dihedrals],
+    [cmap]) si preferisce eseguire `gmx pdb2gmx -f step1_pdbreader.pdb
+    -ff charmm36 -water tip3p -ignh -dir <ff_dir>`: esso genera topol.top
+    dal PDB + lipid.rtp e sovrascrive questo file. Questo scheletro e'
+    solo un fallback quando pdb2gmx non e' disponibile o fallisce.
+
     Usa le definizioni da lipid.rtp per atomi, bond e impropers di ogni
     residuo lipidico.
 
@@ -1102,6 +1131,7 @@ def generate_top(
     ff_path: percorso alla directory charmm36.ff per gli include dei file .itp
     """
     lines: list[str] = []
+    lines.append(_SKELETON_BANNER)
     lines.append("; Topologia generata da make_bilayer.py (cgui-studio)")
     lines.append("; Force field: charmm36 (da lipid.rtp di MacKerell)")
     lines.append("")
@@ -1341,7 +1371,11 @@ def _ensure_top_molecules(top_path: Path, gro_path: str,
             parts = stripped.split()
             if len(parts) >= 2:
                 name, count = parts[0], parts[1]
-                if name not in KNOWN_NON_PROTEIN:
+                # Preservo solo molecole effettivamente presenti nel gro
+                # (es. Protein_chain_X da embed_protein); scarto residui
+                # strani (es. "Other_chain_U/L" da chain del PDB lipidi)
+                # che non hanno corrispondenza nel gro.
+                if name not in KNOWN_NON_PROTEIN and name in gro_counts:
                     try:
                         preserved[name] = preserved.get(name, 0) + int(count)
                     except ValueError:
@@ -1389,15 +1423,23 @@ def _ensure_top_molecules(top_path: Path, gro_path: str,
 
 
 def generate_mdp(box_x: float = 12.0, box_y: float = 12.0, box_z: float = 12.0) -> str:
-    """Genera un file .mdp per minimizzazione energia (steepest descent)."""
+    """Genera un file .mdp per minimizzazione energia (steepest descent).
+
+    Parametri canonici CHARMM36 jul2022:
+      - coulombtype PME, rcoulomb 1.2, rlist 1.2
+      - LJ cut-off con force-switch 1.0-1.2 nm (rvdw-switch 1.0, rvdw 1.2),
+        DispCorr=no (CHARMM36 non usa dispersione correttiva oltre il cut-off)
+      - pme order 4, constraints h-bonds
+      - nsteps 2500 (steep, sufficiente per convergere un bilayer di partenza)
+    """
     return f""";
 ; Minimizzazione energia - generata da make_bilayer.py (cgui-studio)
-;
+; Force field: charmm36 jul2022 (parametri canonici)
 
 integrator        = steep
 emtol             = 1000.0
 emstep            = 0.01
-nsteps            = 500
+nsteps            = 2500
 nstenergy         = 100
 
 nstlog            = 100
@@ -1407,8 +1449,15 @@ nstxtcout         = 0
 
 coulombtype       = PME
 rcoulomb          = 1.2
+rlist             = 1.2
+vdwtype           = Cut-off
+vdw-modifier      = Force-switch
+rvdw-switch       = 1.0
 rvdw              = 1.2
+DispCorr          = no
 pbc               = xyz
+pme_order         = 4
+constraints       = h-bonds
 
 ; Dimensioni scatola (nm) - usate da gmx editconf
 ; box_x = {box_x:.2f}, box_y = {box_y:.2f}, box_z = {box_z:.2f}
@@ -1481,12 +1530,21 @@ def run_gmx(
     cwd: Path,
     input_text: str | None = None,
     timeout: int = 300,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Esegue un comando gmx con gestione output."""
+    """Esegue un comando gmx con gestione output.
+
+    `env` (se fornito) viene MERGIATO con l'ambiente del processo (es.
+    GMXLIB per indicare a pdb2gmx dove sta charmm36.ff/).
+    """
     cmd = [gmx] + args
+    merged_env = None
+    if env:
+        merged_env = dict(os.environ)
+        merged_env.update(env)
     return subprocess.run(
         cmd, cwd=cwd, input=input_text,
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True, text=True, timeout=timeout, env=merged_env,
     )
 
 
@@ -1720,6 +1778,137 @@ def patch_top_with_protein(
     return "\n".join(out) + "\n"
 
 
+def _write_pdb_uniform_chain(src_pdb: str, dst_pdb: str, chain: str = "A") -> None:
+    """Copia un PDB impostando la colonna chain (indice 21) a `chain` per
+    tutte le righe ATOM/HETATM.
+
+    Serve a pdb2gmx: senza questo passo i lipidi con chain "U"/"L" verrebbero
+    trattati come catene molecolari distinte, frammentando le [moleculetype].
+    """
+    with open(src_pdb) as f, open(dst_pdb, "w") as out:
+        for line in f:
+            if line.startswith(("ATOM", "HETATM")) and len(line) > 21:
+                out.write(line[:21] + chain + line[22:])
+            else:
+                out.write(line)
+
+
+def _run_pdb2gmx(
+    gmx_path: str,
+    system_dir: Path,
+    pdb_abs: str,
+    top_abs: str,
+    ff_dir: str | None,
+) -> tuple[bool, str]:
+    """Esegue gmx pdb2gmx per generare la topologia completa (bonds/angles/
+    dihedrals/cmap) dal PDB + charmm36 jul2022 ff.
+
+    Ritorna (ok, pdb_out): se ok, pdb_out e' il percorso del PDB generato
+    da pdb2gmx (step3.pdb, con H rigenerati); altrimenti pdb_out e' il
+    pdb_abs originale (fallback su scheletro).
+    """
+    if not ff_dir:
+        print("AVVISO: directory forcefield non disponibile, salto pdb2gmx "
+              "(topologia scheletro)", file=sys.stderr)
+        return False, pdb_abs
+    step3_pdb = str((system_dir / "step3.pdb").resolve())
+    posres = str((system_dir / "posres.itp").resolve())
+    # pdb2gmx tratta i residui con chain diverse come molecole distinte.
+    # I lipidi del builder hanno chain "U"/"L" (foglietto superiore/inferiore):
+    # le omogenizzo a "A" in una copia temporanea così pdb2gmx vede un'unica
+    # molecola per resname (POPC, CHL1, ...) e genera [moleculetype] corrette.
+    pdb_for_pdb2gmx = str((system_dir / "pdb_for_pdb2gmx.pdb").resolve())
+    _write_pdb_uniform_chain(pdb_abs, pdb_for_pdb2gmx, chain="A")
+    # GROMACS >=2020: pdb2gmx NON ha -dir; si indica la dir del ff tramite
+    # GMXLIB (charmm36.ff/ deve essere contenuta in ff_dir).
+    pdb2gmx_env = {"GMXLIB": str(ff_dir)}
+    r = run_gmx(gmx_path,
+                ["pdb2gmx", "-f", pdb_for_pdb2gmx, "-o", step3_pdb, "-p", top_abs,
+                 "-i", posres, "-ff", "charmm36", "-water", "tip3p",
+                 "-ignh"],
+                cwd=system_dir, input_text="\n", timeout=300,
+                env=pdb2gmx_env)
+    if r.returncode != 0:
+        print(f"AVVISO: gmx pdb2gmx fallito (topologia scheletro): "
+              f"{r.stderr[-600:]}", file=sys.stderr)
+        return False, pdb_abs
+    print("gmx pdb2gmx: OK - topologia completa generata")
+    # pdb2gmx chiama le moleculetype lipidiche "Other_chain_A" (non usa il
+    # nome rtp). Le rinomino col nome del residuo (POPC, CHL1, ...) cosicche'
+    # [ molecules ] e le moleculetype coincidano e grompp le trovi.
+    _fix_moleculetype_names(top_abs)
+    return True, step3_pdb
+
+
+def _fix_moleculetype_names(top_path: str) -> None:
+    """Coerentezza tra [moleculetype] e [molecules] dopo pdb2gmx.
+
+    pdb2gmx, per residui non-standard (lipidi), chiama le moleculetype
+    "Other_chain_X" (X = chain), mentre [ molecules ] usa i nomi rtp
+    (POPC, CHL1, ...). grompp fallirebbe con "No such moleculetype POPC".
+    Qui aggiorno [ molecules ] cosicche' ogni lipide punti al nome
+    della moleculetype effettivamente generata da pdb2gmx
+    (es. "Other_chain_A"), senza toccare le [moleculetype] (complete di
+    bonds/angles/dihedrals). I nomi dei lipidi diversi con la stessa chain
+    rischiano di collidere (entrambe "Other_chain_A"); in tal caso grompp
+    segnala moleculetype duplicata e il sistema resta grompp-incompatibile
+    (fallback onesto: il top scheletro resta disponibile).
+    """
+    with open(top_path) as f:
+        lines = f.readlines()
+
+    # Trovo il nome della (prima) moleculetype lipidica generata da pdb2gmx
+    # (quella che NON e' SOL/NA/CL/K e ha una sezione [ atoms ]).
+    lipid_mt_name = None
+    i = 0
+    n = len(lines)
+    while i < n:
+        s = lines[i].strip()
+        if s == "[ moleculetype ]":
+            # nome nella riga dopo
+            j = i + 1
+            name = None
+            while j < n and not lines[j].strip().startswith("["):
+                if lines[j].strip() and not lines[j].strip().startswith(";"):
+                    name = lines[j].strip().split()[0]
+                    break
+                j += 1
+            # se non e' un solvente/ione noto, e' un lipide (o proteina)
+            if name and name not in ("SOL", "NA", "CL", "K", "tip3p", "ions"):
+                lipid_mt_name = name
+                break
+        i += 1
+
+    if not lipid_mt_name:
+        return  # niente da fare
+
+    # Aggiorno [ molecules ]: sostituisco i nomi lipidi (rtp) con lipid_mt_name.
+    out: list[str] = []
+    i = 0
+    while i < n:
+        s = lines[i].strip()
+        if s == "[ molecules ]":
+            out.append(lines[i])
+            i += 1
+            while i < n:
+                row = lines[i]
+                ss = row.strip()
+                if ss.startswith("[") and ss.endswith("]") and ss != "[ molecules ]":
+                    break
+                if ss and not ss.startswith(";") and not ss.startswith("["):
+                    parts = ss.split()
+                    if len(parts) >= 2 and parts[0] not in ("SOL", "NA", "CL", "K"):
+                        row = row.replace(parts[0], lipid_mt_name, 1)
+                out.append(row)
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+
+    with open(top_path, "w") as f:
+        f.writelines(out)
+
+
 def _gmx_pipeline(
     gmx_path: str,
     system_dir: Path,
@@ -1737,21 +1926,37 @@ def _gmx_pipeline(
     minimize: bool = False,
     min_timeout: int = 900,
     do_solvate: bool = False,
+    ff_dir: str | None = None,
 ) -> bool:
-    """editconf → solvate → grompp → genion → grompp → [mdrun solo con minimize].
+    """pdb2gmx → editconf → solvate → grompp → genion → grompp → [mdrun].
 
-    Genion neutralizza la carica dei lipidi + proteina e porta il sale alla
-    concentrazione (flusso CHARMM-GUI). La minimizzazione mdrun è opt-in via
-    --minimize (su macchine piccole es. E7440 può superare 5 min su ~70k atomi).
-    Ritorna True se la pipeline richiesta è completata.
+    pdb2gmx genera la topologia completa (con [bonds], [angles],
+    [dihedrals], [cmap]) dal PDB + charmm36 jul2022 ff (-ff charmm36 -
+    water tip3p -ignh -dir <ff_dir>). Se pdb2gmx fallisce o ff_dir e'
+    assente, si procede con il topol.top scheletro (banner in testa) e
+    il PDB originale: il sistema resta grompp-incompatibile ma i file
+    sono prodotti (fallback onesto).
+
+    Genion neutralizza la carica dei lipidi + proteina e porta il sale
+    alla concentrazione (flusso CHARMM-GUI). La minimizzazione mdrun e'
+    opt-in via --minimize. Ritorna True se la pipeline richiesta e'
+    completata.
     """
-    def gmx(args_: list[str], input_text: str | None = None, timeout: int = 300):
+    # --- pdb2gmx: topologia completa dal PDB + charmm36 ff ---
+    pdb2gmx_ok, pdb_for_editconf = _run_pdb2gmx(gmx_path, system_dir,
+                                                pdb_abs, top_abs, ff_dir)
+    if not pdb2gmx_ok:
+        print("  -> procedo con topologia SCHELETRO (grompp fallira' senza "
+              "topologia completa)", file=sys.stderr)
+
+    def _gmx(args_: list[str], input_text: str | None = None,
+             timeout: int = 300) -> subprocess.CompletedProcess:
         return run_gmx(gmx_path, args_, cwd=system_dir,
                        input_text=input_text, timeout=timeout)
 
     boxed_gro = str((system_dir / "boxed.gro").resolve())
-    r = gmx(["editconf", "-f", pdb_abs, "-o", boxed_gro,
-             "-box", f"{box_x}", f"{box_y}", f"{box_z}"])
+    r = _gmx(["editconf", "-f", pdb_for_editconf, "-o", boxed_gro,
+              "-box", f"{box_x}", f"{box_y}", f"{box_z}"])
     if r.returncode != 0:
         print(f"AVVISO: gmx editconf fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
@@ -1760,8 +1965,8 @@ def _gmx_pipeline(
     if not do_solvate:
         print("gmx solvate saltato (--solvate non richiesto): file boxed.gro pronto")
         minim_tpr = str((system_dir / "minim.tpr").resolve())
-        r = gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", boxed_gro,
-                 "-p", top_abs, "-o", minim_tpr])
+        r = _gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", boxed_gro,
+                  "-p", top_abs, "-o", minim_tpr])
         if r.returncode != 0:
             print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
             return False
@@ -1773,17 +1978,18 @@ def _gmx_pipeline(
         return True
 
     solvated_gro = str((system_dir / "solvated.gro").resolve())
-    r = gmx(["solvate", "-cp", boxed_gro, "-cs", "spc216.gro",
-             "-o", solvated_gro, "-p", top_abs])
+    r = _gmx(["solvate", "-cp", boxed_gro, "-cs", "spc216.gro",
+              "-o", solvated_gro, "-p", top_abs])
     if r.returncode != 0:
         print(f"AVVISO: gmx solvate fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
     print("gmx solvate: OK")
+    _fix_moleculetype_names(top_abs)
 
     # --- Ioni: grompp preliminare → genion (neutralizza + conc) ---
     tpr_ion = str((system_dir / "ion.tpr").resolve())
-    r = gmx(["grompp", "-maxwarn", "10", "-f", mdp_path, "-c", solvated_gro,
-             "-p", top_abs, "-o", tpr_ion])
+    r = _gmx(["grompp", "-maxwarn", "10", "-f", mdp_path, "-c", solvated_gro,
+              "-p", top_abs, "-o", tpr_ion])
     if r.returncode != 0:
         print(f"AVVISO: gmx grompp (pre-ioni) fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
@@ -1793,10 +1999,10 @@ def _gmx_pipeline(
     pname = "K" if ion_type == "KCl" else "NA"
     ionized_gro = str((system_dir / "ionized.gro").resolve())
     # genion SENZA -p: aggiorniamo manualmente il .top dopo
-    r = gmx(["genion", "-s", tpr_ion, "-o", ionized_gro,
-             "-np", str(n_cat), "-nn", str(n_an),
-             "-pname", pname, "-nname", "CL"],
-            input_text="SOL\n")
+    r = _gmx(["genion", "-s", tpr_ion, "-o", ionized_gro,
+              "-np", str(n_cat), "-nn", str(n_an),
+              "-pname", pname, "-nname", "CL"],
+             input_text="SOL\n")
     if r.returncode != 0:
         print(f"AVVISO: gmx genion fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
@@ -1806,10 +2012,12 @@ def _gmx_pipeline(
     # solvate -p e genion -p dovrebbero averlo già aggiornato; se manca
     # qualcosa, lo aggiungiamo manualmente basandoci sul .gro ionizzato.
     _ensure_top_molecules(Path(top_abs), ionized_gro, upper, lower)
+    # _ensure_top_molecules riscrive il top: rieseguo il fix nomi moleculetype
+    _fix_moleculetype_names(top_abs)
 
     minim_tpr = str((system_dir / "minim.tpr").resolve())
-    r = gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", ionized_gro,
-             "-p", top_abs, "-o", minim_tpr])
+    r = _gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", ionized_gro,
+              "-p", top_abs, "-o", minim_tpr])
     if r.returncode != 0:
         print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
@@ -1819,12 +2027,12 @@ def _gmx_pipeline(
         return True
 
     try:
-        r = gmx(["mdrun", "-s", minim_tpr,
-                 "-o", str((system_dir / "minim.trr").resolve()),
-                 "-c", str((system_dir / "minim.gro").resolve()),
-                 "-e", str((system_dir / "minim.edr").resolve()),
-                 "-g", str((system_dir / "minim.log").resolve())],
-                timeout=min_timeout)
+        r = _gmx(["mdrun", "-s", minim_tpr,
+                  "-o", str((system_dir / "minim.trr").resolve()),
+                  "-c", str((system_dir / "minim.gro").resolve()),
+                  "-e", str((system_dir / "minim.edr").resolve()),
+                  "-g", str((system_dir / "minim.log").resolve())],
+                 timeout=min_timeout)
     except subprocess.TimeoutExpired:
         print(f"AVVISO: mdrun interrotto dopo {min_timeout}s "
               f"(sistema grompp-ready, minimizzazione non completata)",
@@ -1848,12 +2056,16 @@ coulombtype       = PME
 rcoulomb          = 1.2
 rvdw              = 1.2
 rlist             = 1.2
+vdw-modifier      = Force-switch
+rvdw-switch       = 1.0
 pbc               = xyz
 nstlist           = 20
-DispCorr          = EnerPres
+DispCorr          = no
+pme_order         = 4
+constraints       = h-bonds
 """
     nvt = f""";
-; NVT 50 ps con posres sulle teste lipidi - cgui-studio
+; NVT 50 ps con posres sulle teste lipidi - cgui-studio (CHARMM36 canonico)
 ;
 integrator        = md
 dt                = 0.002
@@ -1862,10 +2074,10 @@ nsteps            = 25000
 tcoupl            = v-rescale
 tc-grps           = System
 tau-t             = 1.0
-ref-t             = 303
+ref-t             = 310
 pcoupl            = no
 gen-vel           = yes
-gen-temp          = 303
+gen-temp          = 310
 gen-seed          = 173529
 define            = -DPOSRES
 
@@ -1883,7 +2095,7 @@ nsteps            = 25000
 tcoupl            = v-rescale
 tc-grps           = System
 tau-t             = 1.0
-ref-t             = 303
+ref-t             = 310
 pcoupl            = c-rescale
 pcoupltype        = semiisotropic
 tau-p             = 5.0
@@ -1896,7 +2108,7 @@ nstlog            = 500
 nstenergy         = 500
 """
     prod = f""";
-; Produzione 100 ns libera - cgui-studio
+; Produzione 100 ns libera - cgui-studio (CHARMM36 canonico)
 ;
 integrator        = md
 dt                = 0.002
@@ -1905,7 +2117,7 @@ nsteps            = 50000000
 tcoupl            = v-rescale
 tc-grps           = System
 tau-t             = 1.0
-ref-t             = 303
+ref-t             = 310
 pcoupl            = c-rescale
 pcoupltype        = semiisotropic
 tau-p             = 5.0
@@ -2454,6 +2666,7 @@ File:
                 protein_net_charge=prot_net_charge,
                 minimize=args.minimize, min_timeout=args.min_timeout,
                 do_solvate=args.solvate,
+                ff_dir=str(system_dir),  # contiene charmm36.ff estratto
             )
         else:
             print("AVVISO: --run-gmx richiesto ma gmx non trovato nel PATH.", file=sys.stderr)

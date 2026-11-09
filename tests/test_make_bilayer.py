@@ -106,7 +106,11 @@ def test_generate_top_has_molecules():
 def test_generate_mdp_is_steep():
     mdp = generate_mdp()
     assert "integrator        = steep" in mdp
-    assert "nsteps            = 500" in mdp
+    assert "nsteps            = 2500" in mdp
+    assert "DispCorr          = no" in mdp
+    assert "rlist             = 1.2" in mdp
+    assert "rvdw-switch       = 1.0" in mdp
+    assert "constraints       = h-bonds" in mdp
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +366,52 @@ def test_cli_box_explicit_area_warning(tmp_path: Path):
     metrics = json.loads((generated[0] / "metrics.json").read_text())
     warnings_text = json.dumps(metrics["warning"])
     assert "troppa acqua" in warnings_text
+
+
+# ---------------------------------------------------------------------------
+# E2E: pdb2gmx + grompp (richiede gmx nel PATH)
+# ---------------------------------------------------------------------------
+
+def _gmx_available() -> bool:
+    import shutil
+    return shutil.which("gmx") is not None
+
+
+@pytest.mark.skipif(not _gmx_available(), reason="gmx non disponibile")
+def test_e2e_pdb2gmx_grompp_popc_chol(tmp_path: Path):
+    """pdb2gmx genera topologia completa ([bonds] non vuoto) e grompp
+    produce minim.tpr su POPC+CHL1."""
+    import subprocess
+    script = str(Path(__file__).resolve().parents[1] / "scripts" / "make_bilayer.py")
+    result = subprocess.run(
+        [sys.executable, script, "--spec", "POPC=8;CHOL=2", "--run-gmx",
+         "--output", str(tmp_path)],
+        capture_output=True, text=True, timeout=300,
+    )
+    assert result.returncode == 0, f"CLI fallito: {result.stderr}"
+    generated = [d for d in tmp_path.iterdir() if d.is_dir()]
+    assert len(generated) == 1
+    system_dir = generated[0] / "system"
+    top_path = system_dir / "topol.top"
+    tpr_path = system_dir / "minim.tpr"
+    assert top_path.exists()
+    assert tpr_path.exists(), "minim.tpr non generato (grompp fallito)"
+    top_text = top_path.read_text()
+    assert "[ bonds ]" in top_text
+    # la sezione [ bonds ] deve contenere almeno un bond
+    in_bonds = False
+    n_bonds = 0
+    for line in top_text.splitlines():
+        if line.strip() == "[ bonds ]":
+            in_bonds = True
+            continue
+        if in_bonds:
+            if line.strip().startswith("["):
+                break
+            s = line.strip()
+            if s and not s.startswith(";"):
+                n_bonds += 1
+    assert n_bonds > 0, "[ bonds ] e' vuoto: topologia incompleta"
 
 
 # ---------------------------------------------------------------------------

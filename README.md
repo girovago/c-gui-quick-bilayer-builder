@@ -119,7 +119,7 @@ python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POP
 | `--solvent` | water | `water` (acqua TIP3P) o `none` |
 | `--ions` | KCl | `KCl`, `NaCl` o `none` |
 | `--output` | results | Directory base output |
-| `--run-gmx` | — | Esegue GROMACS: editconf → solvate → genion → grompp. La minimizzazione mdrun è opt-in (`--minimize`) perché su laptop può superare i 5 min |
+| `--run-gmx` | — | Esegue GROMACS: `pdb2gmx` (topologia completa CHARMM36) → `editconf` → solvate → genion → grompp. La minimizzazione mdrun è opt-in (`--minimize`) perché su laptop può superare i 5 min |
 | `--minimize` / `--min-timeout` | off / 900 | Esegue anche `gmx mdrun` (steep) con timeout in secondi |
 | `--build-type` | lipid | `lipid`, `protein`, `dna`, `rna`, `small-mol` |
 | `--pdb` | — | ID PDB (es. `7CFN`) o file PDB: la proteina viene orientata, pre-processata con `gmx pdb2gmx` (CHARMM36) e inserita al centro del bilayer (modulo `scripts/embed_protein.py`) |
@@ -145,7 +145,7 @@ python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POP
 
 | File | Contenuto |
 |------|-----------|
-| `system/step1_pdbreader.pdb` | Struttura bilayer/sistema (PDB) |
+| `system/step1_pdbreader.pdb` | Struttura bilayer/sistema (PDB; coordinate atomiche in **Å**, standard PDB) |
 | `system/topol.top` | Topologia GROMACS (CHARMM36) con position_restraints sulle teste polari |
 | `system/minim.mdp` | Parametri minimizzazione energia (steepest descent) |
 | `system/boxed.gro` | Struttura con box (dopo `gmx editconf`) |
@@ -162,12 +162,15 @@ python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POP
 
 Se `--run-gmx` è specificato, lo script esegue automaticamente:
 
-1. `gmx editconf` — centra e imposta la box
-2. `gmx solvate` — aggiunge acqua TIP3P
-3. `gmx grompp` (pre-ioni) — prepara input per genion
-4. `gmx genion` — aggiunge ioni (neutralizzazione + concentrazione)
-5. `gmx grompp` — prepara l'input per la minimizzazione
-6. `gmx mdrun` — esegue la minimizzazione energetica
+1. `gmx pdb2gmx -ff charmm36 -water tip3p -ignh` — genera la topologia completa
+   (`[bonds]`, `[angles]`, `[dihedrals]`, `[cmap]`) dal PDB + charmm36 jul2022
+   (se fallisce, si procede con un top parziale e banner di avviso)
+2. `gmx editconf` — centra e imposta la box
+3. `gmx solvate` — aggiunge acqua TIP3P
+4. `gmx grompp` (pre-ioni) — prepara input per genion
+5. `gmx genion` — aggiunge ioni (neutralizzazione + concentrazione)
+6. `gmx grompp` — prepara l'input per la minimizzazione
+7. `gmx mdrun` — esegue la minimizzazione energetica
 
 ### Rilevamento versione GROMACS
 
