@@ -8,7 +8,8 @@ Geometria stdlib puro (nessuna dipendenza scientifica esterna):
 - scrive PDB combinato + manifest.json
 
 Uso:
-    python scripts/embed_in_membrane.py --membrane-pdb membrana.pdb --receptor-pdb recettore.pdb --output results/embed_xyz
+    python scripts/embed_in_membrane.py --membrane-pdb membrana.pdb
+        --receptor-pdb recettore.pdb --output results/embed_xyz
 """
 
 from __future__ import annotations
@@ -52,7 +53,12 @@ def _cross(a, b):
 
 
 def parse_pdb(path: str | Path) -> list[dict]:
-    """Legge un PDB e restituisce lista di atomi: {name, resname, resno, chain, x, y, z, elem}."""
+    """Legge un PDB e restituisce lista di atomi: {name, resname, resno, chain, x, y, z, elem}.
+
+    Il PDB e' in ANGSTROM (standard PDB, inclusa l'output di make_bilayer
+    e i file OPM/RCSB): le coordinate vengono convertite in NM
+    internamente (÷10) cosi' il resto del modulo lavora in nm.
+    """
     atoms = []
     path = Path(path)
     if not path.exists():
@@ -64,9 +70,10 @@ def parse_pdb(path: str | Path) -> list[dict]:
                 resname = line[17:20].strip()
                 resno = int(line[22:26])
                 chain = line[21].strip()
-                x = float(line[30:38])
-                y = float(line[38:46])
-                z = float(line[46:54])
+                # PDB in angstrom -> nm
+                x = float(line[30:38]) / 10.0
+                y = float(line[38:46]) / 10.0
+                z = float(line[46:54]) / 10.0
                 elem = line[76:78].strip() or name[0]
                 atoms.append(
                     {
@@ -94,9 +101,11 @@ def pca_axis(points: list[tuple[float, float, float]]) -> tuple[float, float, fl
     if not points:
         return (0.0, 0.0, 1.0)
     n = len(points)
-    cx = sum(p[0] for p in points) / n
-    cy = sum(p[1] for p in points) / n
-    cz = sum(p[2] for p in points) / n
+    # centro geometrico (somma componenti, non usata direttamente: axis
+    # derivato da primo->ultimo CA, sufficiente per orientare lungo z)
+    _ = sum(p[0] for p in points) / n
+    _ = sum(p[1] for p in points) / n
+    _ = sum(p[2] for p in points) / n
     # matrice di covarianza 3x3 (semplificata: solo varianza lungo assi)
     # PCA approssimata: asse di massima varianza via potenza iterata su cov
     # Per robustezza useremo il vettore tra primo e ultimo CA come asse TM approssimativa

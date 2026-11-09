@@ -86,6 +86,15 @@ def test_generate_pdb_counts_match():
     assert "CHL1" in joined  # CHOL è mappato al nome rtp CHARMM36 del colesterolo
 
 
+def test_generate_pdb_is_angstrom():
+    """PDB di output in ANGSTROM (standard PDB): coordinate > 10."""
+    pdb = generate_pdb({"POPC": 4}, {"CHOL": 2})
+    atom_lines = [l for l in pdb.splitlines() if l.startswith("ATOM")]
+    assert atom_lines
+    z_vals = [float(l[46:54]) for l in atom_lines]
+    assert max(abs(z) for z in z_vals) > 10.0  # A, non nm
+
+
 def test_generate_top_has_molecules():
     top = generate_top({"POPC": 4}, {"CHOL": 2}, ion_type="KCl", ion_conc=0.15)
     assert "[ molecules ]" in top
@@ -198,7 +207,7 @@ def test_pp_measured_popc_pure(tmp_path: Path):
     pdb = generate_pdb(upper, lower, box_x=8.0, box_y=8.0)
     m = _rip_metrics(pdb, upper, lower, tmp_path=tmp_path)
     assert abs(m["thickness_P_nm"] - d_expected) <= 0.2
-    # il PDB è in nm: lo spessore deve essere ~3.8 nm, non valori in Å
+    # il PDB è in Å (standard): compute_metrics divide per 10 -> nm
     assert 3.0 < m["thickness_P_nm"] < 4.5
     assert m["n_phosphate_upper"] == 64
     assert m["n_phosphate_lower"] == 64
@@ -275,10 +284,11 @@ def test_metrics_apl_warning_and_water(tmp_path: Path):
     upper, lower = {"POPC": 2}, {"POPC": 2}
     pdb_lines = []
     i = 0
-    for z in (1.9, 1.9):
+    # PDB in A (standard): z in A, compute_metrics divide per 10 -> nm
+    for z in (19.0, 19.0):
         i += 1
         pdb_lines.append(_pdb_line(i, "P", "POPC", 0.0, 0.0, z))
-    for z in (-1.9, -1.9):
+    for z in (-19.0, -19.0):
         i += 1
         pdb_lines.append(_pdb_line(i, "P", "POPC", 0.0, 0.0, z))
     pdb_lines.append("END")
@@ -306,8 +316,9 @@ def test_metrics_apl_warning_and_water(tmp_path: Path):
 def test_metrics_water_warning(tmp_path: Path):
     upper, lower = {"POPC": 2}, {"POPC": 2}
     pdb_lines = [
-        _pdb_line(1, "P", "POPC", 0.0, 0.0, 1.9),
-        _pdb_line(2, "P", "POPC", 0.0, 0.0, -1.9),
+        # PDB in A (standard): z in A, compute_metrics divide per 10 -> nm
+        _pdb_line(1, "P", "POPC", 0.0, 0.0, 19.0),
+        _pdb_line(2, "P", "POPC", 0.0, 0.0, -19.0),
     ]
     pdb_lines.append("END")
     pdb_file = tmp_path / "sys.pdb"
@@ -325,8 +336,9 @@ def test_metrics_water_warning(tmp_path: Path):
 def test_metrics_extra_warnings_passed_through(tmp_path: Path):
     upper, lower = {"POPC": 2}, {"POPC": 2}
     pdb_lines = [
-        _pdb_line(1, "P", "POPC", 0.0, 0.0, 1.9),
-        _pdb_line(2, "P", "POPC", 0.0, 0.0, -1.9),
+        # PDB in A (standard): z in A, compute_metrics divide per 10 -> nm
+        _pdb_line(1, "P", "POPC", 0.0, 0.0, 19.0),
+        _pdb_line(2, "P", "POPC", 0.0, 0.0, -19.0),
         "END",
     ]
     pdb_file = tmp_path / "sys.pdb"

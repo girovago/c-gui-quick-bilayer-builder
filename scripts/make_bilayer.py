@@ -156,6 +156,17 @@ BOND_PO = 0.148
 TETRA_RAD = math.radians(112.0)  # angolo C-C-C negli alcani
 TAIL_TILT = 0.3  # inclinazione delle code verso il centro (rad)
 
+# ---------------------------------------------------------------------------
+# Unità: il PDB di output e' in ANGSTROM (standard PDB); il calcolo interno
+# resta in nanometri. _to_pdb_xyz converte nm -> A solo in fase di scrittura.
+# Tutti i consumatori del PDB (clash, metriche, embed) devono dividere per 10.
+# ---------------------------------------------------------------------------
+
+def _to_pdb_xyz(x: float, y: float, z: float) -> tuple[float, float, float]:
+    """Converte coordinate interne (nm) in angstrom per lo standard PDB."""
+    return x * 10.0, y * 10.0, z * 10.0
+
+
 # Conteggio atomi per lipide (all-atom semplificato)
 LIPID_ATOMS = {
     "POPC": 21,
@@ -384,8 +395,13 @@ def _heavy_clash_count(
     body_lines: list[str], thr: float = 0.12
 ) -> int:
     """Coppie di atomi pesanti fra lipidi DIVERSI dello stesso foglietto
-    a distanza < thr (nm). Soglia 0.12 nm = raggio vdW minimo: le coordinate
-    del builder sono in NANOMETRI."""
+    a distanza < thr (nm).
+
+    Il PDB di output e' in ANGSTROM (standard): le coordinate lette dalle
+    righe ATOM/HETATM vengono convertite in nm (÷10) prima del confronto,
+    quindi thr resta espresso in nm. Soglia 0.12 nm = raggio vdW minimo:
+    rileva solo sovrapposizioni massive, non soft-clash (v. nota BLOCKER 3).
+    """
 
     atoms = []
     for line in body_lines:
@@ -397,9 +413,9 @@ def _heavy_clash_count(
             (
                 int(line[22:26]),
                 line[21].strip(),
-                float(line[30:38]),
-                float(line[38:46]),
-                float(line[46:54]),
+                float(line[30:38]) / 10.0,
+                float(line[38:46]) / 10.0,
+                float(line[46:54]) / 10.0,
             )
         )
     count = 0
@@ -506,6 +522,8 @@ def _sterol_atom_lines(
         ox, oy, oz = coords[name]
         if mirror:
             oz = -oz
+        # PDB standard = angstrom: le coordinate interne (nm) vanno x10
+        ox, oy, oz = _to_pdb_xyz(ox, oy, oz)
         elem = name[0]
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
@@ -617,10 +635,11 @@ def _lipid_atom_lines(
         n_atoms = LIPID_ATOMS.get(resname, 15)
         for i in range(n_atoms):
             atom_name = f"C{i+1}"
+            # PDB standard = angstrom: coordinate interne (nm) x10
+            ox, oy, oz = _to_pdb_xyz(x, y, -z_head if mirror else z_head)
             lines.append(
                 f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
-                f"{chain_id:1s}{resno:4d}    {x:8.3f}{y:8.3f}"
-                f"{-z_head if mirror else z_head:8.3f}  "
+                f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
                 f"1.00  0.00          C"
             )
         return lines
@@ -875,6 +894,8 @@ def _lipid_atom_lines(
         ox, oy, oz = coords[name]
         if mirror:
             oz = -oz
+        # PDB standard = angstrom: coordinate interne (nm) x10
+        ox, oy, oz = _to_pdb_xyz(ox, oy, oz)
         elem = name[0]
         lines.append(
             f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
@@ -907,6 +928,7 @@ def generate_pdb(
         "REMARK   Foglio superiore (upper) e inferiore (lower)"
     )
     lines.append(f"REMARK   Scatola: {box_x:.2f} x {box_y:.2f} x {box_z:.2f} nm")
+    lines.append(f"REMARK   Coordinate atomiche in A (standard PDB); box in nm (descrittivo)")
     lines.append(f"REMARK   Layout: {layout}, centro={'si' if center else 'no'}")
 
     total_lipids = sum(upper.values()) + sum(lower.values())
@@ -1506,8 +1528,10 @@ def _extract_charmm36_ff(system_dir: Path) -> None:
     if intermediate.exists():
         shutil.rmtree(str(intermediate))
 
-    # Copia lipid.rtp nella directory system per l'include nel .top
-    lipid_rtp_src = Path("/tmp/opencode/lipid.rtp")
+    # Copia lipid.rtp nella directory system (provenance output; usato da
+    # generate_top come reference. Fonte: ~/.local/share/cgui-studio/,
+    # NON path temporanei di /tmp).
+    lipid_rtp_src = Path.home() / ".local" / "share" / "cgui-studio" / "lipid.rtp"
     if lipid_rtp_src.exists():
         shutil.copy(str(lipid_rtp_src), str(system_dir / "lipid.rtp"))
 
@@ -1615,8 +1639,9 @@ def center_protein_gro(
 def merge_protein_into_pdb(pdb_text: str, protein_gro_text: str) -> str:
     """Inserisce le coordinate della proteina (da .gro, nm) nel PDB del bilayer.
 
-    Le linee ATOM della proteina vengono convertite a coordinate Å (×10) e
-    inserite PRIMA degli atomi del bilayer, così l'ordine nel PDB corrisponde
+    Il PDB del bilayer e' gia' in ANGSTROM (standard PDB, fix Commit 1); le
+    linee ATOM della proteina vengono convertite da nm a Å (×10) e inserite
+    PRIMA degli atomi del bilayer, così l'ordine nel PDB corrisponde
     all'ordine [ molecules ] (Protein_chain_* → lipidi → SOL → ioni).
     """
     lines = protein_gro_text.splitlines()
@@ -1926,9 +1951,10 @@ def compute_metrics(
 ) -> dict:
     """Metriche fisiche: spessore P-P dal PDB grezzo, APL, acqua per lipide.
 
-    - thickness_P_nm e i conti dello ione fosfato vengono dal PDB RAW
-      (step1_pdbreader.pdb): record ATOM/HETATM, atom name [12:16] == 'P',
-      z in [46:54]. upper = z>0, lower = z<0.
+    Il PDB RAW (step1_pdbreader.pdb) e' in ANGSTROM (standard PDB): la
+    coordinata z in [46:54] viene convertita in nm (÷10) prima dell'uso.
+    thickness_P_nm e i conti dello ione fosfato derivano quindi da nm.
+    upper = z>0, lower = z<0.
     - Da gro_path (se fornito): natoms, box, conteggio SOL. Altrimenti natoms
       dal PDB e box da box_nm.
     - apl_measured_nm2 = (box_x * box_y) / n_lipidi_per_foglietto, con
@@ -1952,7 +1978,7 @@ def compute_metrics(
             if line[12:16].strip() != "P":
                 continue
             try:
-                z = float(line[46:54])
+                z = float(line[46:54]) / 10.0  # PDB in A -> nm
             except ValueError:
                 continue
             (z_p_upper if z > 0 else z_p_lower).append(z)
@@ -2157,7 +2183,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--lipid-rtp", type=str, default=LIPID_RTP_PATH,
-        help="Percorso al file lipid.rtp di CHARMM36 (default: /tmp/opencode/lipid.rtp)",
+        help="Percorso al file lipid.rtp di CHARMM36 (default: "
+             "~/.local/share/cgui-studio/lipid.rtp)",
     )
     # --- Nuovi argomenti per supporto proteine, acidi nucleici, small molecules ---
     parser.add_argument(
@@ -2302,8 +2329,8 @@ def main(argv: list[str] | None = None) -> int:
     # Estrai i file CHARMM36 (forcefield) per grompp
     _extract_charmm36_ff(system_dir)
 
-    # Copia lipid.rtp nella directory system per l'include nel .top
-    lipid_rtp_src = Path("/tmp/opencode/lipid.rtp")
+    # Copia lipid.rtp nella directory system (provenance output).
+    lipid_rtp_src = Path.home() / ".local" / "share" / "cgui-studio" / "lipid.rtp"
     if lipid_rtp_src.exists():
         shutil.copy(str(lipid_rtp_src), str(system_dir / "lipid.rtp"))
 
