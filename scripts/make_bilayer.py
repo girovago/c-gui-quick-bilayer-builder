@@ -380,6 +380,52 @@ def _sterane_offsets() -> dict[str, tuple[float, float]]:
 STEROL_RESIDUES = {"CHL1"}  # rtp_name con geometria steran dedicata
 
 
+def _heavy_clash_count(
+    body_lines: list[str], thr: float = 0.12
+) -> int:
+    """Coppie di atomi pesanti fra lipidi DIVERSI dello stesso foglietto
+    a distanza < thr (nm). Soglia 0.12 nm = raggio vdW minimo: le coordinate
+    del builder sono in NANOMETRI."""
+
+    atoms = []
+    for line in body_lines:
+        if not line.startswith("ATOM") and not line.startswith("HETATM"):
+            continue
+        if (line[76:78].strip() or line[13]) == "H":
+            continue
+        atoms.append(
+            (
+                int(line[22:26]),
+                line[21].strip(),
+                float(line[30:38]),
+                float(line[38:46]),
+                float(line[46:54]),
+            )
+        )
+    count = 0
+    n = len(atoms)
+    for i in range(n):
+        rno_i, ch_i, xi, yi, zi = atoms[i]
+        for j in range(i + 1, n):
+            rno_j, ch_j, xj, yj, zj = atoms[j]
+            if rno_i == rno_j or ch_i != ch_j:
+                continue
+            dx = xi - xj
+            dy = yi - yj
+            dz = zi - zj
+            if abs(dx) >= thr or abs(dy) >= thr or abs(dz) >= thr:
+                continue
+            if dx * dx + dy * dy + dz * dz < thr * thr:
+                count += 1
+    return count
+
+# Tilt massimo della molecola di sterolo rispetto alla normale della
+# membrana (rad). Letteratura (MD di colesterolo in bilayer POPC/POPE):
+# tilt medio 10-20 gradi, distribuzione continua: qui uniforme in [0, MAX].
+# Lo spin azimutale invece e' libero (rotazione attorno a z, angolo uniforme).
+STEROL_TILT_MAX = math.radians(15.0)
+
+
 def _sterol_atom_lines(
     rtp_name: str,
     atoms_info: list[tuple[str, str, float, int]],
@@ -390,23 +436,41 @@ def _sterol_atom_lines(
     z_head: float,
     chain_id: str = "A",
     mirror: bool = False,
+    rot_rng: random.Random | None = None,
 ) -> list[str]:
     """Righe PDB per uno sterolo (CHL1): backbone steran 4 anelli + catena.
 
-    Il piano degli anelli è verticale (perpendicolare alla superficie? no:
-    parallelo alla normale della membrana), OH verso l'acqua, catena verso il
-    centro del bilayer. Con mirror=True le coordinate z sono negate alla
-    scrittura (foglio inferiore = specchio del superiore).
+    Piano degli anelli parallelo alla normale della membrana, OH verso
+    l'acqua, catena verso il centro del bilayer. Orientazione corpo rigido
+    realistica: spin azimutale uniforme attorno a z + tilt in [0, 15 gradi]
+    via away dalla normale (entrambi da rot_rng, riproducibile per resno).
+    Con mirror=True le coordinate z sono negate alla scrittura (foglio
+    inferiore = specchio del superiore).
     """
     off = _sterane_offsets()
     z0 = z_head - 0.6 if z_head > 0 else -(z_head - 0.6)
     flip = 1.0 if z_head > 0 else -1.0
 
-    coords: dict[str, tuple[float, float, float]] = {}
+    rng = rot_rng if rot_rng is not None else random.Random(0)
+    psi = rng.uniform(0.0, 2.0 * math.pi)          # spin azimutale
+    tau = rng.uniform(0.0, STEROL_TILT_MAX)        # tilt dalla normale
+    cos_t, sin_t = math.cos(tau), math.sin(tau)
+    cos_p, sin_p = math.cos(psi), math.sin(psi)
+
+    def _world(u: float, w: float, v: float) -> tuple[float, float, float]:
+        """Da coordinate locali (u lungo x, w perpendicolare, v normale)
+        a coordinate di membrana: tilt attorno all'asse in-plane w,
+        poi spin attorno a z."""
+        tx = u * cos_t + v * sin_t
+        tz = -u * sin_t + v * cos_t
+        return (tx * cos_p - w * sin_p, tx * sin_p + w * cos_p, tz)
+
+    # coordinate locali (u, w, v): backbone da off (w=0), H piazzati nel frame
+    local: dict[str, tuple[float, float, float]] = {}
     for name, _atype, _charge, _group in atoms_info:
         if name in off:
             u, v = off[name]
-            coords[name] = (x + u, y, z0 + flip * v)
+            local[name] = (u, 0.0, v)
 
     # idrogeni: vicino al partner di legame (dal grafo dei bonds rtp)
     bond_map: dict[str, list[str]] = {}
@@ -416,20 +480,26 @@ def _sterol_atom_lines(
 
     h_idx = 0
     for name, _atype, _charge, _group in atoms_info:
-        if name in coords:
+        if name in local:
             continue
-        parents = [p for p in bond_map.get(name, []) if p in coords]
+        parents = [p for p in bond_map.get(name, []) if p in local]
         if parents:
-            px, py, pz = coords[parents[0]]
+            pu, pw, pv = local[parents[0]]
             ang = h_idx * 2.399  # golden-angle: offset distribuiti
             h_idx += 1
-            coords[name] = (
-                px + 0.1 * math.cos(ang),
-                py + 0.1 * math.sin(ang),
-                pz + 0.03 * (1 if h_idx % 2 else -1),
+            local[name] = (
+                pu + 0.1 * math.cos(ang),
+                pw + 0.1 * math.sin(ang),
+                pv + 0.03 * (1 if h_idx % 2 else -1),
             )
         else:
-            coords[name] = (x + 0.05, y + 0.05, z0)
+            local[name] = (0.05, 0.05, 0.0)
+
+    coords: dict[str, tuple[float, float, float]] = {}
+    for name in local:
+        lu, lw, lv = local[name]
+        dx, dy, dz = _world(lu, lw, lv)
+        coords[name] = (x + dx, y + dy, z0 + flip * dz)
 
     lines: list[str] = []
     for name, _atype, _charge, _group in atoms_info:
@@ -525,6 +595,7 @@ def _lipid_atom_lines(
     z_head: float,
     chain_id: str = "A",
     mirror: bool = False,
+    rot_rng: random.Random | None = None,
 ) -> list[str]:
     """Righe PDB per un lipide con geometria dal grafo dei legami rtp.
 
@@ -560,7 +631,7 @@ def _lipid_atom_lines(
     if rtp_name in STEROL_RESIDUES:
         return _sterol_atom_lines(
             rtp_name, atoms_info, residue.get("bonds", []),
-            resno, x, y, z_head, chain_id, mirror,
+            resno, x, y, z_head, chain_id, mirror, rot_rng,
         )
 
     cat, nbrs = _classify_atoms(atoms_info, residue.get("bonds", []))
@@ -838,7 +909,6 @@ def generate_pdb(
     lines.append(f"REMARK   Scatola: {box_x:.2f} x {box_y:.2f} x {box_z:.2f} nm")
     lines.append(f"REMARK   Layout: {layout}, centro={'si' if center else 'no'}")
 
-    resno = 1
     total_lipids = sum(upper.values()) + sum(lower.values())
     if total_lipids == 0:
         raise ValueError("nessun lipide specificato (upper e lower vuoti)")
@@ -895,24 +965,58 @@ def generate_pdb(
             ox_off = -sum(p[0] for p in all_pos) / len(all_pos)
             oy_off = -sum(p[1] for p in all_pos) / len(all_pos)
 
-    # --- Foglio superiore ---
-    for idx, resname in enumerate(upper_species):
-        x, y = upper_positions[idx]
-        for line in _lipid_atom_lines(
-            resname, resno, x + ox_off, y + oy_off, head_z, "U",
-        ):
-            lines.append(line)
-        resno += 1
+    # Rotazioni corpo rigido degli steroli (spin azimutale + tilt) con
+    # risoluzione deterministica dei clash: si generano piu' tentativi con
+    # seed diversi e si tiene il primo packing senza overlap (come fa
+    # PACKMOL, in miniatura). Se nessun tentativo e' pulito, resta il best.
+    def _render_body(rot_seed: int) -> list[str]:
+        """Righe ATOM/HETATM di entrambi i foglietti con seed di rotazione fisso."""
+        rng = random.Random(rot_seed)
+        body: list[str] = []
+        rn = 1
+        # --- Foglio superiore ---
+        for idx, resname in enumerate(upper_species):
+            x, y = upper_positions[idx]
+            body.extend(
+                _lipid_atom_lines(
+                    resname, rn, x + ox_off, y + oy_off, head_z, "U",
+                    rot_rng=rng,
+                )
+            )
+            rn += 1
+        # --- Foglio inferiore (specchio del superiore) ---
+        for idx, resname in enumerate(lower_species):
+            x, y = lower_positions[idx]
+            body.extend(
+                _lipid_atom_lines(
+                    resname, rn, x + ox_off, y + oy_off, head_z, "L", mirror=True,
+                    rot_rng=rng,
+                )
+            )
+            rn += 1
+        return body
 
-    # --- Foglio inferiore (specchio del superiore) ---
-    for idx, resname in enumerate(lower_species):
-        x, y = lower_positions[idx]
-        for line in _lipid_atom_lines(
-            resname, resno, x + ox_off, y + oy_off, head_z, "L", mirror=True,
-        ):
-            lines.append(line)
-        resno += 1
+    body = _render_body(31337)
+    best = (None, 10**9)
+    for attempt in range(20):
+        n_clash = _heavy_clash_count(body)
+        if n_clash < best[1]:
+            best = (attempt, n_clash)
+        if n_clash == 0:
+            break
+        print(
+            f"INFO: tentativo {attempt + 1}: {n_clash} clash pesanti fra lipidi "
+            "(rigenero le orientazioni sterolo)"
+        )
+        body = _render_body(31337 + 7919 * (attempt + 1))
+    if best[1] != 0:
+        print(
+            f"AVVISO: nessun packing sterolo pulito in 20 tentativi; "
+            f"tengo il tentativo {best[0] + 1} con {best[1]} clash"
+        )
+        body = _render_body(31337 + 7919 * best[0])
 
+    lines.extend(body)
     lines.append("END")
     return "\n".join(lines) + "\n"
 
