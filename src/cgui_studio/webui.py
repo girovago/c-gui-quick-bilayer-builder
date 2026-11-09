@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from . import updates
 from .client import ApiError, AuthError, CguiError, Client, JobError, fetch_job
 from .models import JobRecord, JobStatus, Spec
 from .paths import default_results_dir, load_token
@@ -240,6 +241,19 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
                 rel = p.relative_to(base)
                 found.append({"name": p.name, "path": str(rel), "abs": str(p)})
         return found
+
+    # ------------------------------------------------------------- aggiornamenti
+    @app.get("/api/update")
+    def update_status() -> dict[str, Any]:
+        """Stato aggiornamenti del repo locale (attempt: no-repo/offline = degradato, non errore)."""
+        return updates.status()
+
+    @app.post("/api/update")
+    def update_apply() -> dict[str, Any]:
+        """git pull --ff-only (+ build npm se web/dist manca). Mock: rifiutato."""
+        if app.state.mock:
+            raise HTTPException(409, "mock: il finto server non gestisce gli aggiornamenti")
+        return updates.apply()
 
     # ------------------------------------------------------------- auth CHARMM-GUI
     def _mask(email: str) -> str:

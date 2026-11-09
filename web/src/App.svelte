@@ -51,6 +51,24 @@
   let loginBusy = $state(false);
   let loginData = $state({ email: "", password: "" });
 
+  // ---------------------------------------------------------- aggiornamenti
+  let upd = $state(null);
+  let updBusy = $state(false);
+
+  async function checkUpdate(apply) {
+    updBusy = true;
+    try {
+      upd = apply
+        ? await api("/api/update", { method: "POST" })
+        : await api("/api/update");
+      if (apply && upd.mode === "ok") flash("ok", "Aggiornato. Riavvia il server (chiudi e rilancia run.sh) per applicare la nuova versione.");
+    } catch (e) {
+      flash("err", `Aggiornamenti: ${e.message}`);
+    } finally {
+      updBusy = false;
+    }
+  }
+
   async function loadAuth() {
     try { auth = await authGet(); } catch { auth = { logged: false, mode: "none" }; }
   }
@@ -391,6 +409,7 @@
     scheduleJobs();
     scheduleDetail();
     loadAuth(); // stato sessione CHARMM-GUI (RAM o disco-cache CLI)
+    checkUpdate(false); // check aggiornamenti ad ogni avvio (no-repo/offline = silenzioso)
     return () => {
       clearTimeout(detailTimer);
       clearTimeout(jobsTimer);
@@ -400,6 +419,18 @@
 </script>
 
 <div class="mx-auto max-w-[1600px] px-4 py-4 lg:px-6">
+  {#if upd && upd.available}
+    <div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      <span>Nuova versione disponibile ({upd.behind} aggiornamenti in ritardo).</span>
+      <button
+        type="button"
+        disabled={updBusy}
+        class="rounded-md bg-amber-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
+        onclick={() => checkUpdate(true)}
+      >Aggiorna</button>
+      <span class="text-xs text-amber-700">dopo l'aggiornamento riavvia il server per applicarla</span>
+    </div>
+  {/if}
   <header class="mb-4 flex items-baseline justify-between gap-4">
     <h1 class="text-lg font-semibold tracking-tight text-zinc-800">
       cgui-studio <span class="text-zinc-500">· Quick Bilayer wizard</span>
