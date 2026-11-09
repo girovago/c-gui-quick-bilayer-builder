@@ -1605,6 +1605,7 @@ def _gmx_pipeline(
     protein_net_charge: float = 0.0,
     minimize: bool = False,
     min_timeout: int = 900,
+    do_solvate: bool = False,
 ) -> bool:
     """editconf → solvate → grompp → genion → grompp → [mdrun solo con minimize].
 
@@ -1624,6 +1625,21 @@ def _gmx_pipeline(
         print(f"AVVISO: gmx editconf fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
     print("gmx editconf: OK")
+
+    if not do_solvate:
+        print("gmx solvate saltato (--solvate non richiesto): file boxed.gro pronto")
+        minim_tpr = str((system_dir / "minim.tpr").resolve())
+        r = gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", boxed_gro,
+                 "-p", top_abs, "-o", minim_tpr])
+        if r.returncode != 0:
+            print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
+            return False
+        print("gmx grompp: OK - minim.tpr pronto")
+        if not minimize:
+            print("gmx mdrun saltato (--minimize non richiesto): sistema pronto per l'equilibrazione")
+            return True
+        print("AVVISO: minimize senza acqua non supportato, salto mdrun")
+        return True
 
     solvated_gro = str((system_dir / "solvated.gro").resolve())
     r = gmx(["solvate", "-cp", boxed_gro, "-cs", "spc216.gro",
@@ -1667,7 +1683,6 @@ def _gmx_pipeline(
         print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
     print("gmx grompp: OK - minim.tpr pronto")
-
     if not minimize:
         print("gmx mdrun saltato (--minimize non richiesto): sistema pronto per l'equilibrazione")
         return True
@@ -1983,8 +1998,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--run-gmx", action="store_true",
-        help="Esegue gmx editconf/solvate/genion/grompp se disponibile "
+        help="Esegue gmx editconf (e solvate se --solvate) se disponibile "
              "(mdrun solo con --minimize)",
+    )
+    parser.add_argument(
+        "--solvate", action="store_true",
+        help="Aggiungi anche gmx solvate (lento su box grandi)",
     )
     parser.add_argument(
         "--minimize", action="store_true",
@@ -2290,6 +2309,7 @@ File:
     # --- Esecuzione GROMACS opzionale ---
     gmx_run = False
     if args.run_gmx:
+        do_solvate = bool(args.solvate)
         gmx_path = find_gmx()
         if gmx_path:
             gmx_run = True
@@ -2301,6 +2321,7 @@ File:
                 args.ion_type, args.ion_conc,
                 protein_net_charge=prot_net_charge,
                 minimize=args.minimize, min_timeout=args.min_timeout,
+                do_solvate=args.solvate,
             )
         else:
             print("AVVISO: --run-gmx richiesto ma gmx non trovato nel PATH.", file=sys.stderr)
