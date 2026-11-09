@@ -1,6 +1,8 @@
-# C-gui Quick Bilayer Builder
+# C-gui Quick Bilayer Builder — v1.0-alpha
 
 Laboratorio personale di **drug design / drug discovery**: struttura molecolare, dinamica molecolare (MD) e CADD.
+
+> **Trasparenza IA:** questo progetto è stato scritto e revisionato con l'assistenza di modelli linguistici di grandi dimensioni (LLM) — è giusto che chi lo usa lo sappia. Il codice è stato verificato a livello di test unitari (186 test) e con un audit scientifico sul builder lipidico, ma per sistemi di produzione (MD lunghi, pubblicazioni) va sempre validato con i propri dati e con le proprie simulazioni.
 
 Contiene:
 
@@ -257,6 +259,7 @@ Vedi [`SOURCES.md`](SOURCES.md).
 ### Licenze principali
 
 - **cgui-studio**: MIT
+- **C-gui Quick Bilayer Builder**: versione 1.0-alpha (prima release pubblica)
 - **NGL View**: MIT (vendored in `web/public/vendor/`)
 - **CHARMM-GUI**: uso accademico, citazione obbligatoria
 - **CHARMM36**: accademico gratuito con registrazione (MacKerell Lab)
