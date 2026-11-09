@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -30,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -245,7 +244,7 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     # ------------------------------------------------------------- aggiornamenti
     @app.get("/api/update")
     def update_status() -> dict[str, Any]:
-        """Stato aggiornamenti del repo locale (attempt: no-repo/offline = degradato, non errore)."""
+        """Stato aggiornamenti (no-repo/offline = degradato, non errore)."""
         return updates.status()
 
     @app.post("/api/update")
