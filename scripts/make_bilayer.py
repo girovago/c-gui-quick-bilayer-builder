@@ -709,10 +709,11 @@ def _lipid_atom_lines(
         starts: set[str] = chain_extra_starts
         for oname in head_o_list:
             for p in nbrs.get(oname, []):
+                # NB: p puo' essere gia' in coords/visited (l'anchor-loop dei
+                # gliceroli gira prima): in quel caso NON va scartato, la BFS
+                # delle catene deve partire da lui e scendere sui figli.
                 if (
-                    p not in visited
-                    and p not in coords
-                    and cat.get(p) in ("tail", "O_ester", "anchor")
+                    cat.get(p) in ("tail", "O_ester", "anchor")
                 ):
                     starts.add(p)
         if not starts:
@@ -721,12 +722,13 @@ def _lipid_atom_lines(
             _seed_down(s)
 
     def _seed_down(start: str) -> None:
-        if start in visited:
+        # anchor gia' piazzati (es. glicerolo) hanno figli da attraversare:
+        # il guard vale solo per start di catena gia' processati
+        if start in visited and start not in coords:
             return
         # gli anchor (glicerolo/zucchero) scendono dal proprio O_head
         if start in coords:
             visited.add(start)
-            pass
         else:
             parent = [p for p in nbrs.get(start, []) if p in coords]
             if parent:
@@ -1636,7 +1638,7 @@ def _gmx_pipeline(
             return False
         print("gmx grompp: OK - minim.tpr pronto")
         if not minimize:
-            print("gmx mdrun saltato (--minimize non richiesto): sistema pronto per l'equilibrazione")
+            print("gmx mdrun saltato (no --minimize): sistema pronto")
             return True
         print("AVVISO: minimize senza acqua non supportato, salto mdrun")
         return True
@@ -2309,7 +2311,6 @@ File:
     # --- Esecuzione GROMACS opzionale ---
     gmx_run = False
     if args.run_gmx:
-        do_solvate = bool(args.solvate)
         gmx_path = find_gmx()
         if gmx_path:
             gmx_run = True
