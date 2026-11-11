@@ -37,6 +37,9 @@
   let toast = $state(null);
   let busy = $state(false);
   let localBusy = $state(false);
+  let buildProgress = $state(null);
+  let buildJobId = $state(null);
+  let buildTimer = null;
   let buildLog = $state("");
   let buildMetrics = $state(null);
   let previewOpen = $state(false);
@@ -214,6 +217,8 @@
 
   async function handleCreateLocal(spec, params) {
     localBusy = true;
+    buildProgress = null;
+    buildJobId = null;
     try {
       const body = { run_gmx: true };
       if (params?.upper && params?.lower) {
@@ -242,17 +247,48 @@
         method: "POST",
         body: JSON.stringify(body),
       });
-      flash("ok", `Struttura locale: ${res.jobid} · ${res.files.length} file`);
-      buildLog = res.log ?? "";
-      buildMetrics = res.metrics ?? null;
-      selectedId = res.jobid;
-      detail = null;
-      await refreshDetail();
-      await refreshJobs();
+      buildJobId = res.jobid;
+      buildProgress = {
+        steps: [],
+        current: null,
+        started_at: res.started_at ?? null,
+        elapsed_s: 0,
+        done: false,
+      };
+      scheduleBuild();
     } catch (e) {
       flash("err", e.message);
-    } finally {
       localBusy = false;
+    }
+  }
+
+  function scheduleBuild() {
+    clearTimeout(buildTimer);
+    if (!buildJobId || document.hidden) return;
+    buildTimer = setTimeout(tickBuild, 1000);
+  }
+
+  async function tickBuild() {
+    if (!buildJobId) return;
+    try {
+      const p = await api(`/api/jobs/${buildJobId}/progress`);
+      buildProgress = p;
+      if (p.done || p.error) {
+        localBusy = false;
+        clearTimeout(buildTimer);
+        buildTimer = null;
+        buildJobId = null;
+        if (p.error) flash("err", `Build fallito: ${p.error}`);
+        else flash("ok", `Build completato in ${p.elapsed_s}s`);
+        selectedId = p.jobid;
+        await refreshDetail();
+        await refreshJobs();
+      } else {
+        scheduleBuild();
+      }
+    } catch {
+      // errore transiento (es. 404 mentre il job viene creato): riprova
+      scheduleBuild();
     }
   }
 
@@ -413,6 +449,7 @@
     return () => {
       clearTimeout(detailTimer);
       clearTimeout(jobsTimer);
+      clearTimeout(buildTimer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   });
@@ -509,7 +546,7 @@
       </div>
 
       <div class={panel !== "single" && "hidden"} role="tabpanel" aria-label="Wizard singolo">
-        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} buildLog={buildLog} buildMetrics={buildMetrics} onLogClear={() => (buildLog = "")} localBusy={localBusy} />
+        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} buildLog={buildLog} buildMetrics={buildMetrics} onLogClear={() => (buildLog = "")} localBusy={localBusy} buildProgress={buildProgress} />
       </div>
 
       <!-- BatchPanel resta MONTATO anche nei tab in cui non è visibile (class:hidden,

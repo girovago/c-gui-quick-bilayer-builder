@@ -20,6 +20,7 @@ Spec (pydantic).
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
@@ -37,14 +38,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-# make_bilayer è uno script stdlib in scripts/ (importabile, come fanno i test)
-_scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
-if str(_scripts_dir) not in sys.path:
-    sys.path.insert(0, str(_scripts_dir))
-from make_bilayer import outdir_for, parse_spec, STEP_LABELS, STEP_PREPARE  # noqa: E402
-
 from . import updates
-from .client import ApiError, AuthError, CguiError, Client, JobError, fetch_job
+from .client import ApiError, AuthError, Client, JobError, fetch_job
 from .models import JobRecord, JobStatus, Spec
 from .paths import default_results_dir, load_token
 from .store import JobStore
@@ -203,6 +198,14 @@ def _python_cmd(extra: list[str]) -> list[str]:
     if conda:
         return [conda, "run", "-n", "cgui-builder", "python"] + extra
     return [sys.executable] + extra
+
+
+def _mb():
+    """Import pigro di make_bilayer (script stdlib in scripts/): evita E402."""
+    _scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+    if str(_scripts_dir) not in sys.path:
+        sys.path.insert(0, str(_scripts_dir))
+    return importlib.import_module("make_bilayer")
 
 
 # Build locali in volo: jobid -> thread (il server resta reattivo durante l'esecuzione).
@@ -544,16 +547,17 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         if not script.exists():
             raise HTTPException(500, f"script non trovato: {script}")
         base_out = default_results_dir()
+        mb = _mb()
 
         # Outdir nota prima di lanciare (uguale a quella usata da make_bilayer.main),
         # così si può registrare il job e leggere il progress durante l'esecuzione.
         if payload.spec:
-            s = parse_spec(payload.spec)
+            s = mb.parse_spec(payload.spec)
             upper = lower = s
         else:
-            upper = parse_spec(payload.upper or "")
-            lower = parse_spec(payload.lower or "")
-        outdir_path = outdir_for(base_out, upper, lower, None)
+            upper = mb.parse_spec(payload.upper or "")
+            lower = mb.parse_spec(payload.lower or "")
+        outdir_path = mb.outdir_for(base_out, upper, lower, None)
 
         jobid = f"local-{int(datetime.now(UTC).timestamp() * 1000)}"
         spec_in = {
@@ -600,6 +604,7 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         Per i job CHARMM-GUI reali (non local-*) il progress locale non esiste:
         risponde 404 e la UI lo ignora.
         """
+        mb = _mb()
         if not jobid.startswith("local-"):
             raise HTTPException(
                 404, "progress disponibile solo per build locali (job local-*)"
@@ -612,9 +617,9 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             return {
                 "jobid": jobid,
                 "steps": [
-                    {"id": STEP_PREPARE, "label": STEP_LABELS[STEP_PREPARE], "status": "active"}
+                    {"id": "prepare", "label": mb().STEP_LABELS["prepare"], "status": "active"}
                 ],
-                "current": STEP_PREPARE,
+                "current": "prepare",
                 "started_at": started_at,
                 "elapsed_s": 0.0,
                 "done": False,
@@ -625,9 +630,9 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             return {
                 "jobid": jobid,
                 "steps": [
-                    {"id": STEP_PREPARE, "label": STEP_LABELS[STEP_PREPARE], "status": "active"}
+                    {"id": "prepare", "label": mb().STEP_LABELS["prepare"], "status": "active"}
                 ],
-                "current": STEP_PREPARE,
+                "current": "prepare",
                 "started_at": started_at,
                 "elapsed_s": 0.0,
                 "done": False,

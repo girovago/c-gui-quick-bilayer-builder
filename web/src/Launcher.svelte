@@ -2,9 +2,21 @@
   import { onMount } from "svelte";
   import { LIPID_CATALOG, LIPID_CATEGORIES } from "./lipidCatalog.js";
 
-  const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy } = $props();
+  const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy, buildProgress = null } = $props();
 
   const COMMON = new Set(["POPC","CHOL","CHL1","POPE","DPPC","DSPC","DOPS","DOTAP","SM","PSM","DOPC","DOPE","DMPC","DLPC","DPPS","POPS","POPA","POPG","POPI"]);
+
+  const STEP_LIVE = {
+    prepare: "Preparazione della struttura…",
+    pdb2gmx: "Sto generando la topologia CHARMM36…",
+    editconf: "Sto impostando il box…",
+    solvate: "Sto solvatando la membrana…",
+    genion: "Sto aggiungendo gli ioni…",
+    grompp: "Sto preparando l'input MD (grompp)…",
+    metrics: "Sto calcolando le metriche…",
+    complete: "Completato",
+  };
+  function liveLabel(id) { return STEP_LIVE[id] ?? id; }
   const TYPE_COLORS = { lipid: "#3b82f6", protein: "#ef4444", dna: "#10b981", rna: "#8b5cf6", "small-mol": "#f59e0b" };
 
   const CAT_COLORS = { PC: "#3b82f6", PE: "#10b981", PS: "#ec4899", PA: "#f59e0b", PG: "#8b5cf6", "PI / Fosfoinositidi": "#06b6d4", Cardiolipine: "#dc2626", Steroli: "#ef4444", Sfingolipidi: "#14b8a6", Ceramidi: "#a855f7", "Acidi grassi": "#84cc16", Detergenti: "#78716c", Altri: "#a1a1aa" };
@@ -139,6 +151,47 @@
   function submit() { if (!stepValid()) return; const p = params(); if (onSubmit) onSubmit(p.upper || "POPC=64", p); }
 </script>
 <div class="flex flex-col gap-4">
+  {#if buildProgress}
+    <div
+      class="rounded-lg border p-3 mb-4 flex flex-col gap-2
+             {buildProgress.error ? 'border-red-200 bg-red-50' : 'border-cyan-200 bg-cyan-50'}"
+    >
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold text-zinc-700">Avanzamento build</span>
+        {#if buildProgress.done}
+          <span class="text-xs font-bold text-emerald-700">Completato in {buildProgress.elapsed_s}s</span>
+        {:else if buildProgress.error}
+          <span class="text-xs font-bold text-red-700">Errore</span>
+        {:else}
+          <span class="text-xs font-bold text-cyan-700">in corso · {buildProgress.elapsed_s}s</span>
+        {/if}
+      </div>
+      <ul class="space-y-1.5 text-xs">
+        {#each buildProgress.steps as s (s.id)}
+          <li class="flex items-center gap-2">
+            {#if s.status === 'done'}
+              <span class="text-emerald-600 font-bold">✓</span>
+            {:else if s.status === 'active'}
+              <span class="text-cyan-600 font-bold animate-pulse">●</span>
+            {:else if s.status === 'error'}
+              <span class="text-red-600 font-bold">✕</span>
+            {:else}
+              <span class="text-zinc-300">○</span>
+            {/if}
+            <span class="{s.status === 'active' ? 'font-semibold text-cyan-900' : 'text-zinc-600'}">
+              {liveLabel(s.id)}
+            </span>
+            {#if s.status === 'active'}
+              <span class="ml-auto text-[10px] text-cyan-600">attivo</span>
+            {/if}
+            {#if s.status === 'error'}
+              <span class="ml-auto text-[10px] text-red-600">{buildProgress.error}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
   <!-- Stepper -->
   <div class="flex items-center gap-1 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
     {#each STEPS as label, i}
