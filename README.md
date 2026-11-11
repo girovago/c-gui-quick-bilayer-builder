@@ -46,12 +46,10 @@ cgui-studio/
 │   │   ├── Launcher.svelte          # all-atom builder: 4-step wizard, presets, metrics, logs, save/load JSON
 │   │   └── api.js                   # API calls
 │   └── public/vendor/ngl.js         # NGL View 2.5.0 MIT, vendored (no CDN)
-├── tests/                           # pytest (117 tests)
+├── tests/                           # pytest (186 tests)
 ├── results/                         # job outputs (one per job)
-├── literature/                      # PDFs and bibliographic notes
 ├── README.md
 ├── SOURCES.md
-└── AGENTS.md                        # OpenCode instructions
 ```
 
 ---
@@ -182,7 +180,16 @@ The script automatically detects the installed GROMACS version (`gmx --version`)
 
 ### Persistent resources
 
-The `lipid.rtp` file (CHARMM36) and the `charmm36.tgz` tarball (force field) are stored in `~/.local/share/cgui-studio/` (not in `/tmp`, which is cleared on reboot). Downloaded automatically on first use if missing.
+The `lipid.rtp` file (CHARMM36) and the `charmm36.tgz` tarball (force field) are stored in the data dir (not in `/tmp`, which is cleared on reboot). They are NOT downloaded automatically — the MacKerell license requires registration.
+
+Obtain `charmm36.tgz` from https://mackerell.umass.edu and install it with:
+
+    cgui setup-ff --from <percorso/charmm36.tgz>
+
+Data dir location:
+- Linux/macOS: ``$XDG_DATA_HOME/cgui-studio`` or ``~/.local/share/cgui-studio``
+- Windows: ``%LOCALAPPDATA%\\cgui-studio``
+- Override: env var ``CGUI_DATA_DIR``
 
 ---
 
@@ -215,6 +222,23 @@ bash miniforge.sh -b -p ~/miniforge3
 cd cgui-studio
 uv run python scripts/make_bilayer.py --help
 ```
+
+### Windows (PowerShell / cmd)
+
+1. Prerequisiti:
+   - `winget install Git.Git astral-sh.uv OpenJS.NodeJS.LTS`
+2. Clona il repo:
+   - `git clone <url-repo> && cd cgui-studio`
+3. Ambiente e dipendenze:
+   - `uv sync --all-extras`
+4. Test (quelli che richiedono gmx/lipid.rtp si saltano da soli se mancanti):
+   - PowerShell: `$env:CGUI_MOCK="1"; uv run pytest -q`
+   - cmd: `set CGUI_MOCK=1 && uv run pytest -q`
+5. Force field CHARMM36 (richiesto per le analisi scientifiche):
+   - `uv run cgui setup-ff --from <percorso\charmm36.tgz>`
+6. Avvia la GUI:
+   - `.\run.bat` (apre http://127.0.0.1:8756; demo offline: `set CGUI_MOCK=1` prima di lanciare)
+   - GROMACS nativo non esiste su Windows (conda-forge non lo distribuisce): per `--run-gmx` usare WSL2.
 
 For the web GUI:
 
