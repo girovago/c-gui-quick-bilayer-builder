@@ -37,7 +37,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 # Import del modulo paths (per data_dir): lo script sta in scripts/ e non e'
@@ -1264,6 +1264,157 @@ def generate_top(
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# Progress file (scrittura atomica tmp+os.replace, UTF-8 esplicito) per
+# feedback visibile durante la build locale. I costanti ID sono in EN (codice),
+# le label in IT (UI). I step saltati (es. --no-solvate, gmx assente) vengono
+# esclusi dalla lista: non appaiono mai come "pending".
+# ---------------------------------------------------------------------------
+
+STEP_PREPARE = "prepare"
+STEP_PDB2GMX = "pdb2gmx"
+STEP_EDITCONF = "editconf"
+STEP_SOLVATE = "solvate"
+STEP_GENION = "genion"
+STEP_GROMPP = "grompp"
+STEP_METRICS = "metrics"
+STEP_COMPLETE = "complete"
+
+# id -> label italiana mostrata nella UI
+STEP_LABELS = {
+    STEP_PREPARE: "Preparazione struttura",
+    STEP_PDB2GMX: "pdb2gmx (topologia CHARMM36)",
+    STEP_EDITCONF: "editconf (box)",
+    STEP_SOLVATE: "solvate (acqua)",
+    STEP_GENION: "genion (ioni)",
+    STEP_GROMPP: "grompp (preparazione MD)",
+    STEP_METRICS: "metriche",
+    STEP_COMPLETE: "Completato",
+}
+
+# ordine canonico della pipeline
+STEP_ORDER = [
+    STEP_PREPARE,
+    STEP_PDB2GMX,
+    STEP_EDITCONF,
+    STEP_SOLVATE,
+    STEP_GENION,
+    STEP_GROMPP,
+    STEP_METRICS,
+    STEP_COMPLETE,
+]
+
+
+def expected_steps(
+    run_gmx: bool = False,
+    solvate: bool = False,
+    gmx_available: bool = False,
+) -> list[dict[str, str]]:
+    """Lista degli step attesi per una build, esclusi quelli saltati.
+
+    Un passo è escluso se: gmx non disponibile (tutti i step gmx), o
+    --solvate non richiesto (solvate+genion).
+    """
+    if not run_gmx or not gmx_available:
+        gmx_steps = []
+    else:
+        gmx_steps = [STEP_PDB2GMX, STEP_EDITCONF]
+        if solvate:
+            gmx_steps += [STEP_SOLVATE, STEP_GENION]
+        gmx_steps.append(STEP_GROMPP)
+    ids = [STEP_PREPARE] + gmx_steps + [STEP_METRICS, STEP_COMPLETE]
+    return [{"id": sid, "label": STEP_LABELS[sid]} for sid in ids]
+
+
+class ProgressWriter:
+    """Scrive progress.json (atomico: tmp + os.replace, UTF-8) nella outdir.
+
+    Mai solleva: se la scrittura fallisce, il progress semplicemente non è
+    disponibile (la build continua).
+    """
+
+    def __init__(self, path: Path, steps: list[dict[str, str]]) -> None:
+        self.path = Path(path)
+        self.steps: list[dict[str, str]] = [
+            {**s, "status": "pending"} for s in steps
+        ]
+        self.started_at = datetime.now(UTC)
+        self.current: str | None = None
+        self.error: str | None = None
+        self._write()
+
+    def mark(self, step_id: str, status: str, error: str | None = None) -> None:
+        """Aggiorna lo status di uno step e riscrive il file."""
+        if error is not None:
+            self.error = error
+        for s in self.steps:
+            if s["id"] == step_id:
+                s["status"] = status
+                self.current = step_id if status == "active" else self.current
+                break
+        else:
+            # step non presente (escluso): ignorato in silenzio
+            return
+        if status == "done" and self.current == step_id:
+            self.current = None
+        self._write()
+
+    def done(self, error: str | None = None) -> None:
+        """Segna l'ultima step come completata (o errore globale)."""
+        self.error = error
+        self._write()
+
+    def payload(self) -> dict[str, object]:
+        now = datetime.now(UTC)
+        elapsed = (now - self.started_at).total_seconds()
+        return {
+            "jobid": self.path.parent.name,
+            "steps": self.steps,
+            "current": self.current,
+            "started_at": self.started_at.isoformat(),
+            "elapsed_s": round(elapsed, 1),
+            "done": all(s["status"] == "done" for s in self.steps),
+            "error": self.error,
+        }
+
+    def _write(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(self.path.name + f".tmp.{os.getpid()}")
+            tmp.write_text(
+                json.dumps(self.payload(), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp, self.path)
+        except OSError:
+            # progress non critica: la build prosegue comunque
+            pass
+
+
+def outdir_for(
+    base_output: str | Path,
+    upper: dict[str, int],
+    lower: dict[str, int],
+    membtype: str | None = None,
+    today: str | None = None,
+) -> Path:
+    """Outdir finale usata da main(): base_output / AAAA-MM-GG_make_bilayer_<slug>.
+
+    Esposta per riuso (es. webui) senza duplicare la logica di slug/label.
+    """
+    base_output = Path(base_output)
+    today = today or date.today().isoformat()
+    label_parts: list[str] = []
+    if membtype:
+        label_parts.append(membtype)
+    else:
+        for side in (upper, lower):
+            for n, c in sorted(side.items()):
+                label_parts.append(f"{n}{c}")
+    label = "_".join(label_parts) if label_parts else "bilayer"
+    return base_output / f"{today}_make_bilayer_{slug_label(label)}"
+
+
 def _count_gro_residues(gro_path: str) -> dict[str, int]:
     """Conta le molecole per resname in un file .gro GROMACS.
 
@@ -1975,8 +2126,9 @@ def _gmx_pipeline(
     min_timeout: int = 900,
     do_solvate: bool = False,
     ff_dir: str | None = None,
+    progress: ProgressWriter | None = None,
 ) -> bool:
-    """pdb2gmx → editconf → solvate → grompp → genion → grompp → [mdrun].
+    """pdb2gmx → editconf → solvate → genion → grompp → [mdrun].
 
     pdb2gmx genera la topologia completa (con [bonds], [angles],
     [dihedrals], [cmap]) dal PDB + charmm36 jul2022 ff (-ff charmm36 -
@@ -1990,12 +2142,20 @@ def _gmx_pipeline(
     opt-in via --minimize. Ritorna True se la pipeline richiesta e'
     completata.
     """
+    def _mark(step_id: str, status: str, error: str | None = None) -> None:
+        if progress is not None:
+            progress.mark(step_id, status, error)
+
     # --- pdb2gmx: topologia completa dal PDB + charmm36 ff ---
+    _mark(STEP_PDB2GMX, "active")
     pdb2gmx_ok, pdb_for_editconf = _run_pdb2gmx(gmx_path, system_dir,
                                                 pdb_abs, top_abs, ff_dir)
     if not pdb2gmx_ok:
+        _mark(STEP_PDB2GMX, "error", "pdb2gmx fallito")
         print("  -> procedo con topologia SCHELETRO (grompp fallira' senza "
               "topologia completa)", file=sys.stderr)
+    else:
+        _mark(STEP_PDB2GMX, "done")
 
     def _gmx(args_: list[str], input_text: str | None = None,
              timeout: int = 300) -> subprocess.CompletedProcess:
@@ -2003,11 +2163,14 @@ def _gmx_pipeline(
                        input_text=input_text, timeout=timeout)
 
     boxed_gro = str((system_dir / "boxed.gro").resolve())
+    _mark(STEP_EDITCONF, "active")
     r = _gmx(["editconf", "-f", pdb_for_editconf, "-o", boxed_gro,
               "-box", f"{box_x}", f"{box_y}", f"{box_z}"])
     if r.returncode != 0:
+        _mark(STEP_EDITCONF, "error", "editconf fallito")
         print(f"AVVISO: gmx editconf fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
+    _mark(STEP_EDITCONF, "done")
     print("gmx editconf: OK")
 
     if not do_solvate:
@@ -2026,11 +2189,14 @@ def _gmx_pipeline(
         return True
 
     solvated_gro = str((system_dir / "solvated.gro").resolve())
+    _mark(STEP_SOLVATE, "active")
     r = _gmx(["solvate", "-cp", boxed_gro, "-cs", "spc216.gro",
               "-o", solvated_gro, "-p", top_abs])
     if r.returncode != 0:
+        _mark(STEP_SOLVATE, "error", "solvate fallito")
         print(f"AVVISO: gmx solvate fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
+    _mark(STEP_SOLVATE, "done")
     print("gmx solvate: OK")
     _fix_moleculetype_names(top_abs)
 
@@ -2055,6 +2221,7 @@ def _gmx_pipeline(
         print(f"AVVISO: gmx genion fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
     print(f"gmx genion: OK ({n_cat} {pname}+, {n_an} CL-, carica lipidi {net:+g} e)")
+    _mark(STEP_GENION, "done")
 
     # Verifica che il .top abbia tutte le molecole (lipidi + SOL + NA + CL).
     # solvate -p e genion -p dovrebbero averlo già aggiornato; se manca
@@ -2064,11 +2231,14 @@ def _gmx_pipeline(
     _fix_moleculetype_names(top_abs)
 
     minim_tpr = str((system_dir / "minim.tpr").resolve())
+    _mark(STEP_GROMPP, "active")
     r = _gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", ionized_gro,
               "-p", top_abs, "-o", minim_tpr])
     if r.returncode != 0:
+        _mark(STEP_GROMPP, "error", "grompp fallito")
         print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
         return False
+    _mark(STEP_GROMPP, "done")
     print("gmx grompp: OK - minim.tpr pronto")
     if not minimize:
         print("gmx mdrun saltato (--minimize non richiesto): sistema pronto per l'equilibrazione")
@@ -2583,17 +2753,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"AVVISO: {msg}", file=sys.stderr)
             box_warnings.append(msg)
 
-    label_parts: list[str] = []
-    if args.membtype:
-        label_parts.append(args.membtype)
-    else:
-        for side in (upper, lower):
-            for n, c in sorted(side.items()):
-                label_parts.append(f"{n}{c}")
-    label = "_".join(label_parts) if label_parts else "bilayer"
-    outdir = Path(args.output) / f"{today}_make_bilayer_{slug_label(label)}"
+    gmx_available = find_gmx() is not None
+    steps = expected_steps(
+        run_gmx=args.run_gmx,
+        solvate=args.solvate,
+        gmx_available=gmx_available,
+    )
+    outdir = outdir_for(args.output, upper, lower, args.membtype, today)
     system_dir = outdir / "system"
     system_dir.mkdir(parents=True, exist_ok=True)
+    progress_path = system_dir / "progress.json"
+    progress = ProgressWriter(progress_path, steps)
 
     # Estrai i file CHARMM36 (forcefield) per grompp
     _extract_charmm36_ff(system_dir)
@@ -2646,6 +2816,7 @@ File:
 """,
         encoding="utf-8",
     )
+    progress.mark(STEP_PREPARE, "done")
 
     # --- Proteina (--pdb): orientamento + pdb2gmx + embedding (Modulo 4) ---
     prot_net_charge = 0.0
@@ -2727,6 +2898,7 @@ File:
                 minimize=args.minimize, min_timeout=args.min_timeout,
                 do_solvate=args.solvate,
                 ff_dir=str(system_dir),  # contiene charmm36.ff estratto
+                progress=progress,
             )
         else:
             print("AVVISO: --run-gmx richiesto ma gmx non trovato nel PATH.", file=sys.stderr)
@@ -2737,6 +2909,7 @@ File:
         (outdir / fname).write_text(content, encoding="utf-8")
 
     # --- Metriche fisiche: spessore P-P dal PDB grezzo + (se c'è) gro ---
+    progress.mark(STEP_METRICS, "active")
     metrics = None
     ionized = system_dir / "ionized.gro"
     try:
@@ -2771,6 +2944,8 @@ File:
             print(f"  AVVISO metriche: {w}", file=sys.stderr)
     except Exception as exc:
         print(f"AVVISO: metriche non calcolate: {exc}", file=sys.stderr)
+        progress.mark(STEP_METRICS, "error", str(exc))
+    progress.mark(STEP_METRICS, "done")
 
     # --- Manifest ---
     files = {
@@ -2780,6 +2955,7 @@ File:
         "readme": readme_path,
     }
     write_manifest(outdir, files)
+    progress.mark(STEP_COMPLETE, "done")
 
     print(f"Bilayer generato in: {outdir}")
     print(f"  Lipidi totali: {sum(upper.values()) + sum(lower.values())}")
