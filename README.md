@@ -270,3 +270,16 @@ See [`SOURCES.md`](SOURCES.md).
 - The public CHARMM-GUI documentation covers only General + Quick Bilayer. PDB Reader is not publicly documented but is required for embedding proteins.
 - The CHARMM-GUI token expires: re-run `cgui login` if you get error 403.
 - For production calculations (long MD runs), use a cluster or dedicated server: this tool is optimized for small systems and quick tests on a local workstation.
+
+---
+
+## Versione italiana (sintesi) 🇮🇹
+
+**C-gui Quick Bilayer Builder v1.0-alpha** — laboratorio personale di drug design: builder all-atom di bilayer **in locale** (GROMACS-ready) + GUI web sopra l'API ufficiale di CHARMM-GUI.
+
+- **Builder locale** (`scripts/make_bilayer.py`): bilayer, sistemi con proteine (orientamento OPM/PPM), DNA, RNA, small molecules → `.pdb` (in Å), `topol.top` CHARMM36 completo via `gmx pdb2gmx`, `minim.tpr` pronto, mdp NVT/NPT/produzione.
+- **GUI web**: wizard Quick Bilayer, catalogo 411 lipidi CHARMM36, preset membrane, batch sequenziale, vista 3D NGL (vendored, no CDN), confronto affiancato, metriche post-build (spessore P-P, APL, carica).
+- **Scienza**: mescolamento laterale reale, APL sperimentali, bilanciamento cariche automatico con `genion`, geometria steranica dedicata per il colesterolo.
+- **Progetto scritto con assistenza LLM** — verificato con 186 test unitari e audit scientifico; valida sempre con i tuoi dati prima dell'uso in produzione.
+
+> Attualmente cerco un dottorato/postdoc finanziato in CADD/drug discovery (Europa o Italia) — contattami pure! 😊
