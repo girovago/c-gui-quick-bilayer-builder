@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -180,6 +182,20 @@ def _validation_detail(exc: ValidationError) -> str:
         loc = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
         parts.append(f"{loc}: {msg}" if loc else msg)
     return "; ".join(parts) or "spec non valida"
+
+
+def _python_cmd(extra: list[str]) -> list[str]:
+    """Comando per eseguire uno script Python in modo portabile.
+
+    Usa ``conda run -n cgui-builder python`` se ``conda`` si trova nel PATH
+    (ambiente di build con GROMACS), altrimenti l'interprete corrente
+    (``sys.executable``). Nessun percorso home hardcoded: funziona su
+    Windows, Linux e macOS.
+    """
+    conda = shutil.which("conda")
+    if conda:
+        return [conda, "run", "-n", "cgui-builder", "python"] + extra
+    return [sys.executable] + extra
 
 
 def create_app(
@@ -463,15 +479,8 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         script = Path(__file__).resolve().parents[2] / "scripts" / "make_bilayer.py"
         if not script.exists():
             raise HTTPException(500, f"script non trovato: {script}")
-        conda = Path.home() / "miniforge3" / "bin" / "conda"
-        if not conda.exists():
-            raise HTTPException(500, "conda non trovato in ~/miniforge3/bin/conda")
-
         base_out = default_results_dir()
-        cmd = [
-            str(conda), "run", "-n", "cgui-builder", "python", str(script),
-            "--output", str(base_out),
-        ]
+        cmd = _python_cmd([str(script), "--output", str(base_out)])
         if payload.spec:
             cmd += ["--spec", payload.spec]
         if payload.upper:
@@ -591,15 +600,8 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         script = Path(__file__).resolve().parents[2] / "scripts" / "embed_protein.py"
         if not script.exists():
             raise HTTPException(500, f"script non trovato: {script}")
-        conda = Path.home() / "miniforge3" / "bin" / "conda"
-        if not conda.exists():
-            raise HTTPException(500, "conda non trovato in ~/miniforge3/bin/conda")
-
         base_out = default_results_dir()
-        cmd = [
-            str(conda), "run", "-n", "cgui-builder", "python", str(script),
-            "--output", str(base_out),
-        ]
+        cmd = _python_cmd([str(script), "--output", str(base_out)])
         if payload.pdb_id:
             cmd += ["--pdb", payload.pdb_id]
         if payload.chain:
@@ -661,10 +663,6 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         script = Path(__file__).resolve().parents[2] / "scripts" / "embed_in_membrane.py"
         if not script.exists():
             raise HTTPException(500, f"script non trovato: {script}")
-        conda = Path.home() / "miniforge3" / "bin" / "conda"
-        if not conda.exists():
-            raise HTTPException(500, "conda non trovato in ~/miniforge3/bin/conda")
-
         uploads_dir = default_results_dir() / "uploads"
 
         def _find_pdb(name: str) -> Path:
@@ -687,13 +685,15 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             raise HTTPException(404, f"file PDB non trovato: {exc}") from None
 
         out_dir = default_results_dir() / (payload.out_dir or "results")
-        cmd = [
-            str(conda), "run", "-n", "cgui-builder", "python", str(script),
-            "--membrane-pdb", str(membrane_path),
-            "--receptor-pdb", str(receptor_path),
-            "--chain", payload.chain or "R",
-            "--output", str(out_dir),
-        ]
+        cmd = _python_cmd(
+            [
+                str(script),
+                "--membrane-pdb", str(membrane_path),
+                "--receptor-pdb", str(receptor_path),
+                "--chain", payload.chain or "R",
+                "--output", str(out_dir),
+            ]
+        )
 
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
