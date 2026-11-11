@@ -1,4 +1,4 @@
-# C-gui Quick Bilayer Builder — v1.0-alpha
+# C-gui Quick Bilayer Builder — v2.0-alpha
 
 Personal laboratory for **drug design / drug discovery**: molecular structure, molecular dynamics (MD) and CADD.
 
@@ -7,7 +7,7 @@ Personal laboratory for **drug design / drug discovery**: molecular structure, m
 Contains:
 
 - **C-gui Quick Bilayer Builder** (`cgui-studio` on disk) — local web GUI (FastAPI + Svelte 5 + Tailwind + vendored NGL) over the official CHARMM-GUI REST API (Quick Bilayer). Batch construction of lipid compositions with provenance manifests and GROMACS-ready output.
-- **scripts/make_bilayer.py** — local **all-atom molecular builder** (no CHARMM-GUI server needed): builds bilayers, systems with proteins, nucleic acids (DNA/RNA), small molecules and small complexes, and runs GROMACS directly (editconf, solvate, grompp, mdrun).
+- **scripts/make_bilayer.py** — local **all-atom molecular builder** (no CHARMM-GUI server needed): builds bilayers, systems with proteins, nucleic acids (DNA/RNA), small molecules and small complexes, and runs GROMACS directly (editconf, solvate, grompp, mdrun). **v2.0: build progress step-by-step with live UI feedback, pdb2gmx fixed for multi-species membranes, Windows 10/11 support.**
 
 ---
 
@@ -15,9 +15,9 @@ Contains:
 
 1. [Project structure](#project-structure)
 2. [Web GUI (cgui-studio)](#web-gui-cgui-studio)
-3. [Local all-atom builder (`scripts/make_bilayer.py`) — NEW](#local-all-atom-builder-scriptsmake_bilayerpy---new)
-4. [Molecule support: lipids, proteins, nucleic acids, small molecules — NEW](#molecule-support---new)
-5. [Native GROMACS output and version detection — NEW](#native-gromacs-output-and-version-detection---new)
+3. [Local all-atom builder (`scripts/make_bilayer.py`)](#local-all-atom-builder-scriptsmake_bilayerpy)
+4. [Molecule support: lipids, proteins, nucleic acids, small molecules](#molecule-support)
+5. [Native GROMACS output and version detection](#native-gromacs-output-and-version-detection)
 6. [Setup and installation](#setup-and-installation)
 7. [Tests and verification](#tests-and-verification)
 8. [Sources and licenses](#sources-and-licenses)
@@ -69,6 +69,8 @@ Features:
 - **Quick Bilayer wizard** (Singolo tab): lipid composition (`POPC=64`, `POPC=48;CHOL=16`), margin, wdist, ions (KCl/NaCl), membrane_only, run_ffconverter
 - **All-atom builder launcher** (4 steps: Type → Composition → Environment → Summary): 411 CHARMM36 lipid catalog with live search and category filters, symmetric or asymmetric leaflets, membrane presets (1 click), physical controls (box, centering, solvent, ions), post-build metrics (P-P thickness, APL, water/lipid), GROMACS logs, save/load composition as JSON
 - **Batch multi-composition** (Batch tab): local sequential queue (one row at a time), per-row states, optional auto-fetch, stop/resume, wizard pre-fill initialization
+- **Build progress step-by-step** (v2.0): when a local GROMACS build starts, a panel shows each pipeline step — preparation → pdb2gmx → editconf → solvate → genion → grompp → metrics → completed — with green checkmarks on finished steps, the active step highlighted with a live label ("sto solvatando la membrana…") and elapsed time, and "Completato in NNs" at the end. **No infinite spinner.** Polling pauses when the tab is hidden.
+- **Responsive layout** (v2.0): stepper labels always visible, grid and dropdowns adapt to 16:9 full screen and narrow side-by-side panes (e.g. OpenCode preview).
 - **NGL 3D view** with spacefill, ball+stick, licorice, cartoon; water/ions toggle; reset view; mouse hints; side-by-side comparison of two structures
 - SpecSketch: live composition diagram
 - NGL vendored in `web/public/vendor/` (no CDN, no external dependencies)
@@ -140,6 +142,8 @@ python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POP
 - **Volumetric P-P thickness**: D_B calculated from CHARMM36 lipid volumes with sterol correction (×1.2), not fixed constants — verified POPC 3.78 nm, POPC+CHL1 3.95 nm (experimental range 3.7–4.1)
 - **Protein in bilayer (`--pdb`)**: OPM/PPM/passthrough orientation, `pdb2gmx` with charmm36 + cmap terms, split topology per chain, real net charge read from .itp and compensated by genion (8 extra Cl⁻ for GPBAR1 +8 e), TM domain centered at z=0, `[ molecules ]` with protein on first line (order consistent with PDB)
 - **"grompp-ready" run**: without `--minimize` the GROMACS flow ends with `minim.tpr` in ~2 min on a laptop (E7440), with `metrics.json` always written
+- **pdb2gmx multi-species fix (v2.0)**: one PDB chain per lipid species (POPC→B, CHL1→C…) so pdb2gmx generates one `[moleculetype]` per species instead of fusing all lipids into a single `Other_chain_A`; `[molecules]` counts are preserved from pdb2gmx (only SOL/NA/CL are recounted from the `.gro`). This fixes the fatal grompp error *"number of coordinates in coordinate file does not match topology"* on membranes with more than one lipid species. Verified end-to-end: POPC=64/64 + water + KCl (128 lipids) → `minim.tpr` OK; POPC+CHL1 mixed → OK.
+- **Build progress (v2.0)**: `ProgressWriter` writes `progress.json` atomically in the job `system/` dir; the web UI polls `GET /api/jobs/{id}/progress` every 1s (paused when tab hidden) and renders step chip panels with checkmarks, active-step label and elapsed time.
 
 ### Native GROMACS output
 
@@ -282,7 +286,7 @@ See [`SOURCES.md`](SOURCES.md).
 ### Main licenses
 
 - **cgui-studio**: MIT
-- **C-gui Quick Bilayer Builder**: version 1.0-alpha (first public release)
+- **C-gui Quick Bilayer Builder**: version 2.0-alpha
 - **NGL View**: MIT (vendored in `web/public/vendor/`)
 - **CHARMM-GUI**: academic use, citation required
 - **CHARMM36**: free academic use with registration (MacKerell Lab)
@@ -299,10 +303,11 @@ See [`SOURCES.md`](SOURCES.md).
 
 ## Versione italiana (sintesi) 🇮🇹
 
-**C-gui Quick Bilayer Builder v1.0-alpha** — laboratorio personale di drug design: builder all-atom di bilayer **in locale** (GROMACS-ready) + GUI web sopra l'API ufficiale di CHARMM-GUI.
+**C-gui Quick Bilayer Builder v2.0-alpha** — laboratorio personale di drug design: builder all-atom di bilayer **in locale** (GROMACS-ready) + GUI web sopra l'API ufficiale di CHARMM-GUI.
 
 - **Builder locale** (`scripts/make_bilayer.py`): bilayer, sistemi con proteine (orientamento OPM/PPM), DNA, RNA, small molecules → `.pdb` (in Å), `topol.top` CHARMM36 completo via `gmx pdb2gmx`, `minim.tpr` pronto, mdp NVT/NPT/produzione.
 - **GUI web**: wizard Quick Bilayer, catalogo 411 lipidi CHARMM36, preset membrane, batch sequenziale, vista 3D NGL (vendored, no CDN), confronto affiancato, metriche post-build (spessore P-P, APL, carica).
+- **v2.0**: feedback di avanzamento step-per-step durante la build locale (niente spinner infinito), fix del doppio conteggio in `grompp` su membrane multi-specie, porting Windows 10/11 (PowerShell, senza WSL).
 - **Scienza**: mescolamento laterale reale, APL sperimentali, bilanciamento cariche automatico con `genion`, geometria steranica dedicata per il colesterolo.
 - **Progetto scritto con assistenza LLM** — verificato con 186 test unitari e audit scientifico; valida sempre con i tuoi dati prima dell'uso in produzione.
 

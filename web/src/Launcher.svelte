@@ -195,9 +195,9 @@
   <!-- Stepper -->
   <div class="flex items-center gap-1 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
     {#each STEPS as label, i}
-      {#if i > 0}<div class="h-px w-2 flex-1 bg-zinc-200 sm:w-4"></div>{/if}
-      <button type="button" class="flex min-w-[2.25rem] items-center justify-center gap-2 rounded-xl px-2 py-2 text-sm font-medium transition-all sm:min-w-0 sm:justify-start sm:px-4 {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-300 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
-        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="hidden whitespace-nowrap font-medium lg:inline">{label}</span>
+      {#if i > 0}<div class="h-px flex-1 bg-zinc-200 sm:w-4 md:w-6"></div>{/if}
+      <button type="button" class="flex min-w-[2.25rem] items-center justify-center gap-2 rounded-xl px-2 py-2 text-sm font-medium transition-all sm:min-w-0 sm:justify-start sm:px-4 md:px-6 {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-300 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
+        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="whitespace-nowrap font-medium xs:inline text-[10px] sm:text-xs">{label}</span>
       </button>
     {/each}
   </div>
@@ -243,7 +243,7 @@
           {/if}
           <span class="ml-auto text-xs font-medium text-zinc-500">{totalCounts(counts())} lipidi</span>
         </div>
-        <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 gap-4">
           <div class="rounded-xl border border-zinc-200 p-3">
             <div class="mb-2 flex items-center gap-2">
               <h3 class="shrink-0 text-sm font-semibold text-zinc-900">Catalogo</h3>
@@ -290,7 +290,7 @@
             <div class="flex items-center gap-2 mb-2"><span class="font-semibold text-indigo-800 text-xs">🎯 Opzione 2 — Inserisci recettore in membrana esistente</span></div>
             <p class="text-xs text-indigo-700 mb-3">Carica il PDB della membrana già generata e il PDB del recettore per inserirlo nella membrana.</p>
             {#if existingPdbs.length > 0}
-              <div class="grid grid-cols-2 gap-3 mb-3">
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2 mb-3">
                 <div><label class="block text-[10px] text-indigo-600 mb-1">Membrana esistente</label><select bind:value={selectedExistingMembrane} class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs"><option value="">— scegli —</option>{#each existingPdbs as p (p.path)}<option value={p.path}>{p.name}</option>{/each}</select></div>
                 <div><label class="block text-[10px] text-indigo-600 mb-1">Recettore esistente</label><select bind:value={selectedExistingReceptor} class="w-full rounded border border-zinc-300 px-2 py-1.5 text-xs"><option value="">— scegli —</option>{#each existingPdbs as p (p.path)}<option value={p.path}>{p.name}</option>{/each}</select></div>
               </div>
@@ -309,7 +309,7 @@
           </div>
         {/if}
 
-        <div class="mt-5 flex gap-3 border-t border-zinc-100 pt-5">
+        <div class="mt-5 flex flex-col sm:flex-row gap-3 border-t border-zinc-100 pt-5">
           <button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button>
         </div>
       {:else if buildType === "protein"}
@@ -332,7 +332,7 @@
   {#if step === 3}
     <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Ambiente</h2><p class="text-sm text-zinc-500">Box, solvente e ioni</p></div>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 gap-8">
         <div class="space-y-4">
           <h3 class="text-sm font-semibold text-zinc-900">Box (nm)</h3>
           <div class="grid grid-cols-3 gap-3">

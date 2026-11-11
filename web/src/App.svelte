@@ -517,7 +517,7 @@
     </div>
   {/if}
 
-  <main class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)_minmax(320px,1fr)]">
+  <main class="grid min-w-0 gap-4 sm:grid-cols-[340px_minmax(0,1fr)_340px] lg:grid-cols-[380px_minmax(0,1fr)_minmax(360px,1fr)]">
     <!-- ============================================ colonna FORM -->
     <section class="min-w-0 rounded-lg border border-zinc-200 bg-white p-3" aria-label="Costruzione">
       <div class="mb-3 flex gap-1" role="tablist" aria-label="Modalità di composizione">
@@ -567,7 +567,7 @@
             <select
               id="f-compare"
               bind:value={compareJobId}
-              class="max-w-48 rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800"
+              class="max-w-xs w-full rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800"
               title="scegli il job da mostrare a destra (job locali finiti)"
             >
               {#each compareableJobs as j (j.jobid)}
@@ -595,7 +595,7 @@
         {/if}
       </div>
       {#if compareJobId}
-        <div class="grid grid-cols-2 gap-2" aria-label="Confronto affiancato">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-2" aria-label="Confronto affiancato">
           <Molecule jobid={record?.outdir ? selectedId : null} />
           <Molecule jobid={compareJobId} />
         </div>
