@@ -47,8 +47,18 @@ import sys
 import tarfile
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+
+# Import del modulo paths (per data_dir): lo script sta in scripts/ e non e'
+# un modulo del pacchetto (stesso pattern usato per l'import di ppm_orientation).
+try:
+    from cgui_studio import paths  # type: ignore
+except ImportError:
+    _src = Path(__file__).resolve().parents[1] / "src"
+    if str(_src) not in sys.path:
+        sys.path.insert(0, str(_src))
+    from cgui_studio import paths  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Costanti
@@ -59,7 +69,7 @@ OPM_URL = "https://opm.phar.umich.edu/pdb/{pdb_id}.pdb"
 NETWORK_TIMEOUT = 20  # secondi per OPM (per spec)
 DEFAULT_HYDROPHOBIC_THICKNESS = 30.0  # Å
 GMRX_WATER = "tip3p"
-CHARMM36_TARBALL = Path.home() / ".local" / "share" / "cgui-studio" / "charmm36.tgz"
+CHARMM36_TARBALL = paths.data_dir() / "charmm36.tgz"
 
 # Residui del dominio transmembrana di GPBAR1/TGR5 (approssimati, per
 # stimare tm_z_min / tm_z_max se non c'è orientamento OPM).
@@ -406,8 +416,8 @@ def get_gmx_binary() -> str:
 
 
 def ensure_charmm36_ff() -> Path:
-    """Estrae charmm36.ff da ~/.local/share/cgui-studio/charmm36.tgz se serve."""
-    local_ff = Path.home() / ".local" / "share" / "cgui-studio" / "charmm36.ff"
+    """Estrae charmm36.ff da <data_dir>/charmm36.tgz se serve."""
+    local_ff = paths.data_dir() / "charmm36.ff"
     if local_ff.exists() and (local_ff / "forcefield.itp").exists():
         return local_ff
     tarball = CHARMM36_TARBALL
@@ -459,7 +469,7 @@ def prepare_pdb2gmx(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     in_pdb = out_dir / "input.pdb"
-    in_pdb.write_text(pdb_text)
+    in_pdb.write_text(pdb_text, encoding="utf-8")
 
     env = os.environ.copy()
     # GMXLIB deve puntare alla directory che CONTIENE charmm36.ff,
@@ -516,7 +526,7 @@ def split_topol_by_chain(
         for name, body in sections:
             if name == wanted:
                 itp_path = out_dir / f"topol_ProteinChain{chain}.itp"
-                itp_path.write_text("[ moleculetype ]\n" + body)
+                itp_path.write_text("[ moleculetype ]\n" + body, encoding="utf-8")
                 results[chain] = itp_path
                 break
     return results
@@ -552,7 +562,7 @@ def run(
     per_chain_atom_counts = {c["chain"]: c["n_atoms"] for c in chain_info}
 
     # Salva PDB orientato
-    (out_dir / "opm_oriented.pdb").write_text(pdb_text)
+    (out_dir / "opm_oriented.pdb").write_text(pdb_text, encoding="utf-8")
 
     # Coordinate / carica / TM range
     z_span = z_span_nm(pdb_text)
@@ -591,9 +601,13 @@ def run(
         "pdb2gmx_log_tail": log_tail,
         "itp_files": {k: str(v.relative_to(out_dir)) for k, v in itp_results.items()},
         "fixed_residues": fixed_residues,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": (
+            datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+        ),
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
 
     print(f"Embed proteina completato: {pdb} (source={source})")
     print(f"  Chain: {chains}")

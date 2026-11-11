@@ -40,6 +40,20 @@ import tarfile
 from datetime import date, datetime
 from pathlib import Path
 
+# Import del modulo paths (per data_dir): lo script sta in scripts/ e non e'
+# un modulo del pacchetto, quindi aggiungiamo src/ al percorso di import
+# solo se l'import diretto fallisce (pattern usato anche per embed_protein).
+try:
+    from cgui_studio import paths  # type: ignore
+except ImportError:
+    _src = Path(__file__).resolve().parents[1] / "src"
+    if str(_src) not in sys.path:
+        sys.path.insert(0, str(_src))
+    from cgui_studio import paths  # type: ignore
+
+LIPID_RTP_ERROR: str | None = None  # motivo se lipid.rtp non e' caricabile
+LIPID_RTP_LOAD_OK = False
+
 # ---------------------------------------------------------------------------
 # Costanti geometriche (nanometri)
 # ---------------------------------------------------------------------------
@@ -198,7 +212,7 @@ LIPID_NAME_MAP = {
 # Parsing lipid.rtp CHARMM36 (atomi, bond, impropers per ogni residuo)
 # ---------------------------------------------------------------------------
 
-LIPID_RTP_PATH = str(Path.home() / ".local" / "share" / "cgui-studio" / "lipid.rtp")
+LIPID_RTP_PATH = paths.data_dir() / "lipid.rtp"
 
 
 def parse_lipid_rtp(path: str) -> dict:
@@ -247,11 +261,43 @@ def parse_lipid_rtp(path: str) -> dict:
     return residues
 
 
-LIPID_RTP_DATA: dict = {}
-try:
-    LIPID_RTP_DATA = parse_lipid_rtp(LIPID_RTP_PATH)
-except Exception:
+def load_lipid_rtp(path: Path = LIPID_RTP_PATH) -> dict:
+    """Carica lipid.rtp e setta LIPID_RTP_ERROR/LIPID_RTP_LOAD_OK.
+
+    Se manca o il parsing fallisce, restituisce {} e registra il motivo in
+    LIPID_RTP_ERROR: il chiamante decide se bloccare (default) o degradare
+    in modalita' atomi generici solo con --allow-generic-atoms.
+    """
+    global LIPID_RTP_DATA, LIPID_RTP_ERROR, LIPID_RTP_LOAD_OK
     LIPID_RTP_DATA = {}
+    LIPID_RTP_ERROR = None
+    LIPID_RTP_LOAD_OK = False
+    if not path.is_file():
+        LIPID_RTP_ERROR = (
+            f"lipid.rtp non trovato: {path}\n"
+            "Il force field CHARMM36 (lipid.rtp + charmm36.tgz) NON viene "
+            "scaricato automaticamente (licenza MacKerell richiede registrazione).\n"
+            "Procurati charmm36.tgz da https://mackerell.umass.edu e poi:\n"
+            f"    cgui setup-ff --from <percorso/charmm36.tgz>\n"
+            "Oppure rilancia con --allow-generic-atoms per proseguire con atomi generici "
+            "(topologia incompleta, grompp non riuscira')."
+        )
+        return {}
+    try:
+        LIPID_RTP_DATA = parse_lipid_rtp(str(path))
+        LIPID_RTP_LOAD_OK = True
+        return LIPID_RTP_DATA
+    except Exception as exc:  # noqa: BLE001 - parsing del force field
+        LIPID_RTP_ERROR = (
+            f"errore nel parsare lipid.rtp ({path}): {exc}\n"
+            "Il file potrebbe essere corrotto o non essere un lipid.rtp CHARMM36 valido.\n"
+            f"Rigenera con: cgui setup-ff --from <percorso/charmm36.tgz>"
+        )
+        return {}
+
+
+LIPID_RTP_DATA: dict = {}
+load_lipid_rtp()
 
 
 def parse_lipid_text(text: str) -> dict[str, int]:
@@ -1615,7 +1661,9 @@ def write_manifest(outdir: Path, files: dict[str, Path]) -> None:
                 "sha256": digest,
                 "size": path.stat().st_size,
             }
-    (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (outdir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2394,9 +2442,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Ioni: KCl, NaCl o none",
     )
     parser.add_argument(
-        "--lipid-rtp", type=str, default=LIPID_RTP_PATH,
+        "--lipid-rtp", type=str, default=str(LIPID_RTP_PATH),
         help="Percorso al file lipid.rtp di CHARMM36 (default: "
              "~/.local/share/cgui-studio/lipid.rtp)",
+    )
+    parser.add_argument(
+        "--allow-generic-atoms", action="store_true",
+        help="Procedi anche senza lipid.rtp valido usando atomi generici "
+             "(topologia incompleta: grompp non riuscira'; metrics.json con valid=false).",
     )
     # --- Nuovi argomenti per supporto proteine, acidi nucleici, small molecules ---
     parser.add_argument(
@@ -2454,12 +2507,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Ricarica lipid.rtp se specificato via CLI
-    global LIPID_RTP_DATA
-    if args.lipid_rtp != LIPID_RTP_PATH:
-        try:
-            LIPID_RTP_DATA = parse_lipid_rtp(args.lipid_rtp)
-        except Exception as exc:
-            print(f"AVVISO: impossibile caricare {args.lipid_rtp}: {exc}", file=sys.stderr)
+    global LIPID_RTP_DATA, LIPID_RTP_ERROR, LIPID_RTP_LOAD_OK
+    if str(args.lipid_rtp) != str(LIPID_RTP_PATH):
+        load_lipid_rtp(Path(args.lipid_rtp))
+
+    if not LIPID_RTP_LOAD_OK and not args.allow_generic_atoms:
+        print(LIPID_RTP_ERROR, file=sys.stderr)
+        return 1
+    if not LIPID_RTP_LOAD_OK and args.allow_generic_atoms:
+        print(f"AVVISO: {LIPID_RTP_ERROR.splitlines()[0]}", file=sys.stderr)
+        print("  -> modalita degradata: atomi generici, topologia incompleta.", file=sys.stderr)
 
     upper = parse_spec(args.upper) if args.upper else {}
     lower = parse_spec(args.lower) if args.lower else {}
@@ -2553,7 +2610,7 @@ def main(argv: list[str] | None = None) -> int:
         box_x=args.box_x, box_y=args.box_y, box_z=args.box_z,
         center=args.center, layout=args.layout,
     )
-    pdb_path.write_text(pdb_content)
+    pdb_path.write_text(pdb_content, encoding="utf-8")
 
     # --- TOP ---
     top_path = system_dir / "topol.top"
@@ -2563,12 +2620,13 @@ def main(argv: list[str] | None = None) -> int:
         solvent=args.solvent, ions=args.ions,
         ff_path=str(system_dir / "charmm36.ff"),
     )
-    top_path.write_text(top_content)
+    top_path.write_text(top_content, encoding="utf-8")
 
     # --- MDP ---
     mdp_path = system_dir / "minim.mdp"
     mdp_path.write_text(
-        generate_mdp(box_x=args.box_x, box_y=args.box_y, box_z=args.box_z)
+        generate_mdp(box_x=args.box_x, box_y=args.box_y, box_z=args.box_z),
+        encoding="utf-8",
     )
 
     # --- README ---
@@ -2585,7 +2643,8 @@ File:
   system/topol.top            topologia GROMACS
   system/minim.mdp            minimizzazione energia (steep)
   manifest.json               sha256 dei file
-"""
+""",
+        encoding="utf-8",
     )
 
     # --- Proteina (--pdb): orientamento + pdb2gmx + embedding (Modulo 4) ---
@@ -2621,7 +2680,7 @@ File:
         for ch, fn in itp_rel.items():
             src = prot_dir / fn
             (system_dir / src.name).write_text(
-                clean_chain_itp(src.read_text())
+                clean_chain_itp(src.read_text()), encoding="utf-8"
             )
             itp_names[ch] = src.name
         for posre_src in prot_dir.glob("posre*.itp"):
@@ -2641,14 +2700,15 @@ File:
             prot_embed_manifest["tm_z_min_nm"],
             prot_embed_manifest["tm_z_max_nm"],
         )
-        (prot_dir / "protein_centered.gro").write_text(centered)
+        (prot_dir / "protein_centered.gro").write_text(centered, encoding="utf-8")
         merged_pdb = merge_protein_into_pdb(pdb_path.read_text(), centered)
-        pdb_path.write_text(merged_pdb)
+        pdb_path.write_text(merged_pdb, encoding="utf-8")
 
         # topol: include itp proteici + righe [ molecules ]
         top_text = top_path.read_text()
         top_path.write_text(
-            patch_top_with_protein(top_text, itp_names, posre_names)
+            patch_top_with_protein(top_text, itp_names, posre_names),
+            encoding="utf-8",
         )
 
     # --- Esecuzione GROMACS opzionale ---
@@ -2674,7 +2734,7 @@ File:
     # --- File di equilibratura (NVT/NPT/produzione + script) ---
     equilib = generate_equilib_files()
     for fname, content in equilib.items():
-        (outdir / fname).write_text(content)
+        (outdir / fname).write_text(content, encoding="utf-8")
 
     # --- Metriche fisiche: spessore P-P dal PDB grezzo + (se c'è) gro ---
     metrics = None
@@ -2695,12 +2755,18 @@ File:
                 "itp_files": prot_embed_manifest["itp_files"],
                 "fixed_residues": prot_embed_manifest["fixed_residues"],
             }
+        metrics["valid"] = LIPID_RTP_LOAD_OK
+        metrics["ff_reason"] = LIPID_RTP_ERROR
         (outdir / "metrics.json").write_text(
-            json.dumps(metrics, indent=2, ensure_ascii=False) + "\n"
+            json.dumps(metrics, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
-        print(f"  Metriche: spessore P-P {metrics['thickness_P_nm']} nm, "
-              f"APL {metrics['apl_measured_nm2']} nm2, "
-              f"acqua/lipide {metrics['water_per_lipid']}")
+        if LIPID_RTP_LOAD_OK:
+            print(f"  Metriche: spessore P-P {metrics['thickness_P_nm']} nm, "
+                  f"APL {metrics['apl_measured_nm2']} nm2, "
+                  f"acqua/lipide {metrics['water_per_lipid']}")
+        else:
+            print(f"  Metriche NON valide: {LIPID_RTP_ERROR.splitlines()[0]}", file=sys.stderr)
         for w in metrics.get("warning", []):
             print(f"  AVVISO metriche: {w}", file=sys.stderr)
     except Exception as exc:

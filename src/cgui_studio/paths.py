@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -39,9 +40,18 @@ def cache_dir() -> Path:
 
 
 def data_dir() -> Path:
-    """Database dei job (XDG_DATA_HOME)."""
+    """Database dei job e risorse (XDG_DATA_HOME, override CGUI_DATA_DIR).
+
+    Su Windows usa ``%LOCALAPPDATA%\\cgui-studio``; su Linux/macOS rispetta
+    ``XDG_DATA_HOME`` oppure ``~/.local/share/cgui-studio``.
+    """
     if (ov := _home_override()) is not None:
         return ov / "data"
+    if os.environ.get("CGUI_DATA_DIR"):
+        return Path(os.environ["CGUI_DATA_DIR"]).expanduser() / APP
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+        return Path(base) / APP
     base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
     return Path(base) / APP
 

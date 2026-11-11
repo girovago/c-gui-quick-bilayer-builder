@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import tarfile
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -11,6 +13,7 @@ from typer.testing import CliRunner
 
 import cgui_studio
 import cgui_studio.cli as cli_mod
+from cgui_studio import paths
 from cgui_studio import paths as paths_mod
 from cgui_studio.cli import app
 from cgui_studio.store import JobStore
@@ -300,3 +303,41 @@ def test_wait_timeout_is_passed_to_client(home, sleep_noop, monkeypatch):
 
 def pytest_fail(msg):  # gruccia del test: non deve essere mai chiamata
     raise AssertionError(msg)
+
+
+def _make_fake_charmm36_tarball(tar_path: Path, with_forcefield: bool = True,
+                                with_lipid_rtp: bool = True) -> None:
+    with tarfile.open(tar_path, "w:gz") as tf:
+        if with_forcefield:
+            info = tarfile.TarInfo(name="charmm36.ff/forcefield.itp")
+            info.size = len(b"; forcefield")
+            tf.addfile(info, io.BytesIO(b"; forcefield"))
+        if with_lipid_rtp:
+            info = tarfile.TarInfo(name="lipid.rtp")
+            info.size = len(b"; lipid rtp")
+            tf.addfile(info, io.BytesIO(b"; lipid rtp"))
+
+
+def test_setup_ff_from_tarball(home, tmp_path):
+    tar_path = tmp_path / "charmm36.tgz"
+    _make_fake_charmm36_tarball(tar_path)
+    result = runner.invoke(app, ["setup-ff", "--from", str(tar_path)])
+    assert result.exit_code == 0, result.output
+    dd = paths.data_dir()
+    assert (dd / "charmm36.ff" / "forcefield.itp").exists()
+    assert (dd / "lipid.rtp").exists()
+
+
+def test_setup_ff_without_tarball(home):
+    result = runner.invoke(app, ["setup-ff"])
+    assert result.exit_code == 1
+    assert "mackerell.umass.edu" in result.output
+    assert "setup-ff --from" in result.output
+
+
+def test_setup_ff_tarball_without_forcefield(home, tmp_path):
+    tar_path = tmp_path / "charmm36.tgz"
+    _make_fake_charmm36_tarball(tar_path, with_forcefield=False)
+    result = runner.invoke(app, ["setup-ff", "--from", str(tar_path)])
+    assert result.exit_code == 1
+    assert "forcefield.itp" in result.output

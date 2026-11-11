@@ -5,7 +5,9 @@ from __future__ import annotations
 import functools
 import getpass
 import os
+import shutil
 import sys
+import tarfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -473,6 +475,114 @@ def doctor_cmd(ctx: typer.Context) -> None:
     if problems:
         raise typer.Exit(1)
     _ok("Doctor: ambiente ok.")
+
+
+#: link ufficiale per procurarsi charmm36.tgz (registrazione richiesta, licenza MacKerell).
+_CHARMM36_TARBALL_URL = "https://mackerell.umass.edu"
+
+
+def _flatten_ff_dir(root: Path) -> None:
+    """Appiattisce la cartella estratta: se c'è una sotto-directory unica che
+    contiene ``forcefield.itp`` (nomi cartella diversi: charmm36.ff,
+    charmm36-jul2022.ff, ...), ne sposta il contenuto un livello su in ``root``."""
+    changed = True
+    while changed:
+        changed = False
+        candidates = [d for d in root.iterdir() if d.is_dir() and (d / "forcefield.itp").exists()]
+        if len(candidates) == 1:
+            src = candidates[0]
+            for item in src.iterdir():
+                dest = root / item.name
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest, ignore_errors=True)
+                    else:
+                        dest.unlink()
+                item.rename(dest)
+            shutil.rmtree(src, ignore_errors=True)
+            changed = True
+
+
+@app.command("setup-ff")
+@_guarded
+def setup_ff_cmd(
+    ctx: typer.Context,
+    from_path: Annotated[
+        Path | None,
+        typer.Option("--from", help="Percorso al tarball charmm36.tgz (MacKerell)"),
+    ] = None,
+) -> None:
+    """Installa il force field CHARMM36 in ``<data_dir>/``.
+
+    Copia ``charmm36.tgz`` in ``data_dir()``, lo estrae con il modulo
+    ``tarfile`` (niente comando esterno ``tar``), copia ``lipid.rtp`` in
+    ``data_dir()`` e verifica che ``forcefield.itp`` esista.
+    Senza ``--from`` stampa il link ufficiale MacKerell e le istruzioni.
+    """
+    dd = paths.data_dir()
+    dd.mkdir(parents=True, exist_ok=True)
+
+    if from_path is None:
+        _die(
+            "charmm36.tgz non specificato.\n"
+            "Procurati il tarball da "
+            f"{_CHARMM36_TARBALL_URL} (registrazione richiesta, licenza MacKerell) e poi:\n"
+            f"    cgui setup-ff --from <percorso/charmm36.tgz>\n"
+            f"I file verranno installati in: {dd}",
+        )
+
+    tarball = from_path.expanduser().resolve()
+    if not tarball.is_file():
+        _die(f"tarball non trovato: {tarball}")
+
+    dest_tarball = dd / "charmm36.tgz"
+    shutil.copy2(str(tarball), str(dest_tarball))
+
+    local_ff = dd / "charmm36.ff"
+    if local_ff.exists():
+        shutil.rmtree(local_ff, ignore_errors=True)
+    local_ff.mkdir(parents=True, exist_ok=True)
+
+    lipid_rtp_extracted = False
+    with tarfile.open(dest_tarball, "r:gz") as tf:
+        members = tf.getmembers()
+        ff_members = [m for m in members if m.name.endswith("forcefield.itp") and not m.isdir()]
+        if not ff_members:
+            _die(
+                f"forcefield.itp non trovato in {tarball}: non e' un tarball charmm36 valido.\n"
+                f"Procuralo da {_CHARMM36_TARBALL_URL}."
+            )
+        ff_dir_prefix = str(Path(ff_members[0].name).parent)
+        to_extract = [
+            m for m in members
+            if m.name.startswith(ff_dir_prefix + "/") and not m.isdir()
+        ]
+        tf.extractall(local_ff, members=to_extract, filter="data")
+
+        for m in members:
+            if m.name.endswith("lipid.rtp") and not m.isdir():
+                src = tf.extractfile(m)
+                if src is not None:
+                    with open(dd / "lipid.rtp", "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    lipid_rtp_extracted = True
+
+    _flatten_ff_dir(local_ff)
+
+    if not (local_ff / "forcefield.itp").exists():
+        _die(
+            f"forcefield.itp non trovato dopo estrazione da {tarball}.\n"
+            f"Procurati un tarball charmm36 valido da {_CHARMM36_TARBALL_URL}."
+        )
+
+    _ok(f"Force field CHARMM36 installato in {local_ff}")
+    if lipid_rtp_extracted:
+        _ok(f"lipid.rtp copiato in {dd / 'lipid.rtp'}")
+    else:
+        typer.secho(
+            "avviso: lipid.rtp non trovato nel tarball (opzionale: lo fornisce lo "
+            "utente separatamente)", fg=typer.colors.YELLOW,
+        )
 
 
 def _fmt_age(seconds: float | None) -> str:

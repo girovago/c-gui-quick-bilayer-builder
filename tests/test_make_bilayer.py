@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 
 # Import diretto dello script (script puro stdlib)
 import sys
@@ -12,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+import make_bilayer as mb  # noqa: E402
 from make_bilayer import (  # noqa: E402
     apl_for,
     autobox_xy,
@@ -27,6 +30,34 @@ from make_bilayer import (  # noqa: E402
 from make_bilayer import (
     main as make_bilayer_main,
 )
+
+from cgui_studio import paths  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Risorsa esterna: lipid.rtp CHARMM36 (non scaricato automaticamente).
+# I test che ne hanno bisogno skipano se mancante; se c'è (questo ambiente
+# Linux) girano davvero contro il file reale.
+# ---------------------------------------------------------------------------
+
+REAL_LIPID_RTP = Path.home() / ".local" / "share" / "cgui-studio" / "lipid.rtp"
+
+
+@pytest.fixture
+def real_lipid_rtp(monkeypatch):
+    """Imposta data_dir() sul lipid.rtp reale invece della home temporanea."""
+    if not REAL_LIPID_RTP.is_file():
+        pytest.skip(
+            f"lipid.rtp non installato in {REAL_LIPID_RTP}: "
+            "esegui cgui setup-ff --from <percorso/charmm36.tgz>"
+        )
+    # home (autouse) imposta CGUI_STUDIO_HOME in tmp: lo rimuovo e uso CGUI_DATA_DIR
+    # puntata alla cartella reale, così data_dir() risolve lipid.rtp vero anche
+    # per i test che lanciano lo script in subprocess.
+    monkeypatch.delenv("CGUI_STUDIO_HOME", raising=False)
+    monkeypatch.setenv("CGUI_DATA_DIR", str(REAL_LIPID_RTP.parent.parent))
+    mb.load_lipid_rtp(REAL_LIPID_RTP)
+    return REAL_LIPID_RTP
+
 
 # ---------------------------------------------------------------------------
 # Parsing spec
@@ -74,7 +105,7 @@ def test_generate_pb_has_header_and_end():
     assert len(atom_lines) > 0
 
 
-def test_generate_pdb_counts_match():
+def test_generate_pdb_counts_match(real_lipid_rtp):
     upper = {"POPC": 10, "CHOL": 5}
     lower = {"POPC": 8}
     pdb = generate_pdb(upper, lower)
@@ -89,13 +120,13 @@ def test_generate_pdb_counts_match():
 def test_generate_pdb_is_angstrom():
     """PDB di output in ANGSTROM (standard PDB): coordinate > 10."""
     pdb = generate_pdb({"POPC": 4}, {"CHOL": 2})
-    atom_lines = [l for l in pdb.splitlines() if l.startswith("ATOM")]
+    atom_lines = [line for line in pdb.splitlines() if line.startswith("ATOM")]
     assert atom_lines
-    z_vals = [float(l[46:54]) for l in atom_lines]
+    z_vals = [float(v[46:54]) for v in atom_lines]
     assert max(abs(z) for z in z_vals) > 10.0  # A, non nm
 
 
-def test_generate_top_has_molecules():
+def test_generate_top_has_molecules(real_lipid_rtp):
     top = generate_top({"POPC": 4}, {"CHOL": 2}, ion_type="KCl", ion_conc=0.15)
     assert "[ molecules ]" in top
     assert "POPC" in top
@@ -122,7 +153,7 @@ def outdir(tmp_path: Path) -> Path:
     return tmp_path / "results"
 
 
-def test_cli_generates_files(outdir: Path):
+def test_cli_generates_files(real_lipid_rtp, outdir: Path):
     import subprocess
 
     script = str(Path(__file__).resolve().parents[1] / "scripts" / "make_bilayer.py")
@@ -205,7 +236,7 @@ def _rip_metrics(pdb_text: str, upper, lower, box=(8.0, 8.0, 12.0),
     return compute_metrics(str(pdb_file), upper, lower, box_nm=box)
 
 
-def test_pp_measured_popc_pure(tmp_path: Path):
+def test_pp_measured_popc_pure(real_lipid_rtp, tmp_path: Path):
     upper, lower = {"POPC": 64}, {"POPC": 64}
     d_expected = bilayer_thickness(upper, lower)
     pdb = generate_pdb(upper, lower, box_x=8.0, box_y=8.0)
@@ -217,7 +248,7 @@ def test_pp_measured_popc_pure(tmp_path: Path):
     assert m["n_phosphate_lower"] == 64
 
 
-def test_pp_measured_popc_chol_mixed(tmp_path: Path):
+def test_pp_measured_popc_chol_mixed(real_lipid_rtp, tmp_path: Path):
     upper, lower = {"POPC": 56, "CHOL": 24}, {"POPC": 56, "CHOL": 24}
     d_expected = bilayer_thickness(upper, lower)
     pdb = generate_pdb(upper, lower, box_x=8.0, box_y=8.0)
@@ -238,7 +269,7 @@ def test_autobox_popc64():
     assert 6.9 <= box + 1e-9 <= 7.5
 
 
-def test_autobox_cli(tmp_path: Path):
+def test_autobox_cli(real_lipid_rtp, tmp_path: Path):
     outdir = tmp_path / "results"
     rc = make_bilayer_main([
         "--spec", "POPC=64", "--output", str(outdir),
@@ -354,7 +385,7 @@ def test_metrics_extra_warnings_passed_through(tmp_path: Path):
     assert "box troppo grande" in m["warning"]
 
 
-def test_cli_box_explicit_area_warning(tmp_path: Path):
+def test_cli_box_explicit_area_warning(real_lipid_rtp, tmp_path: Path):
     # box 12x12 esplicito con POPC=10 (area 6.83 nm2 < 40% del box): warning
     outdir = tmp_path / "results"
     rc = make_bilayer_main([
@@ -378,7 +409,7 @@ def _gmx_available() -> bool:
 
 
 @pytest.mark.skipif(not _gmx_available(), reason="gmx non disponibile")
-def test_e2e_pdb2gmx_grompp_popc_chol(tmp_path: Path):
+def test_e2e_pdb2gmx_grompp_popc_chol(real_lipid_rtp, tmp_path: Path):
     """pdb2gmx genera topologia completa ([bonds] non vuoto) e grompp
     produce minim.tpr su POPC+CHL1."""
     import subprocess
@@ -470,3 +501,43 @@ def test_clean_chain_itp_real_pdb2gmx_file():
     assert "POSRES_WATER" not in out
     # la definizione posres relativa resta (risolta dalla copia in system/)
     assert "#include \"posre.itp\"" in out
+
+
+def _run_make_bilayer(args, env=None):
+    script = str(Path(__file__).resolve().parents[1] / "scripts" / "make_bilayer.py")
+    return subprocess.run(
+        [sys.executable, script] + args,
+        capture_output=True, text=True, timeout=120, env=env,
+    )
+
+
+def test_make_bilayer_missing_lipid_rtp_clear_error(tmp_path, monkeypatch):
+    monkeypatch.delenv("CGUI_STUDIO_HOME", raising=False)
+    empty = tmp_path / "ffempty"
+    empty.mkdir()
+    monkeypatch.setenv("CGUI_DATA_DIR", str(empty))
+    result = _run_make_bilayer(["--spec", "POPC=16"], env=os.environ)
+    assert result.returncode == 1, result.stderr
+    assert "lipid.rtp non trovato" in result.stderr
+    assert str(paths.data_dir() / "lipid.rtp") in result.stderr
+    assert "setup-ff --from" in result.stderr
+
+
+def test_make_bilayer_allow_generic_atoms(tmp_path, monkeypatch):
+    monkeypatch.delenv("CGUI_STUDIO_HOME", raising=False)
+    empty = tmp_path / "ffempty"
+    empty.mkdir()
+    monkeypatch.setenv("CGUI_DATA_DIR", str(empty))
+    outdir = tmp_path / "results"
+    result = _run_make_bilayer(
+        ["--spec", "POPC=16", "--allow-generic-atoms", "--output", str(outdir)],
+        env=os.environ,
+    )
+    assert result.returncode == 0, result.stderr
+    generated = [d for d in outdir.iterdir() if d.is_dir()]
+    assert len(generated) == 1
+    metrics = json.loads((generated[0] / "metrics.json").read_text())
+    assert metrics["valid"] is False
+    assert metrics["ff_reason"] is not None
+    # la console non stampa spessore P-P come risultato valido
+    assert "Metriche: spessore P-P" not in result.stdout
