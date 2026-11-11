@@ -666,6 +666,10 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             data["elapsed_s"] = round((datetime.now(UTC) - started).total_seconds(), 1)
         except ValueError:
             pass
+        # il ProgressWriter scrive un jobid fittizio ("system"): la UI usa
+        # questo campo per fetchare /api/jobs/{id} → sovrascrivo con quello
+        # reale della richiesta, altrimenti 404 in console.
+        data["jobid"] = jobid
         return data
 
     @app.post("/api/embed-protein")
