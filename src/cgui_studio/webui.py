@@ -186,6 +186,12 @@ def _validation_detail(exc: ValidationError) -> str:
     return "; ".join(parts) or "spec non valida"
 
 
+# Timeout dei subprocess di build (secondi), configurabile via env: i sistemi
+# grandi (64+ lipidi per foglietto) possono superare i 5 minuti solo nella
+# fase di generazione PDB.
+BUILD_TIMEOUT_S = float(os.environ.get("CGUI_BUILD_TIMEOUT", "900"))
+
+
 def _python_cmd(extra: list[str]) -> list[str]:
     """Comando per eseguire uno script Python in modo portabile.
 
@@ -230,6 +236,10 @@ def _run_build_async(
         cmd += ["--lower", payload.lower]
     if payload.run_gmx:
         cmd += ["--run-gmx"]
+        # solvente acqua → solvate+genion reali (topol.top dichiara SOL:
+        # senza il flag --solvate grompp fallirebbe per molecole mancanti)
+        if payload.solvent == "water":
+            cmd += ["--solvate"]
     if payload.box_x is not None:
         cmd += ["--box-x", str(payload.box_x)]
     if payload.box_y is not None:
@@ -245,7 +255,7 @@ def _run_build_async(
     if payload.ions in ("KCl", "NaCl"):
         cmd += ["--ion-type", payload.ions, "--ion-conc", "0.15"]
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT_S)
     except subprocess.TimeoutExpired:
         store.update(jobid, state="error", error="make_bilayer timeout")
         return
@@ -648,6 +658,14 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
                 "elapsed_s": 0.0,
                 "done": False,
             }
+        # elapsed ricalcolato a ogni lettura: il file di progress si aggiorna
+        # solo ai mark, durante un passo lungo (es. generate_pdb) resterebbe
+        # ferma e il timer della UI sembrerebbe congelato.
+        try:
+            started = datetime.fromisoformat(data.get("started_at") or started_at)
+            data["elapsed_s"] = round((datetime.now(UTC) - started).total_seconds(), 1)
+        except ValueError:
+            pass
         return data
 
     @app.post("/api/embed-protein")
@@ -676,7 +694,7 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         # il recettore e preparare la topologia CHARMM36.
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT_S)
         except subprocess.TimeoutExpired as exc:
             raise HTTPException(504, f"embed_protein timeout: {exc}") from exc
 
@@ -759,7 +777,7 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         )
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT_S)
         except subprocess.TimeoutExpired as exc:
             raise HTTPException(504, f"embed_in_membrane timeout: {exc}") from exc
 

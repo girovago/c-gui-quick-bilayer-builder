@@ -1749,7 +1749,7 @@ def _extract_charmm36_ff(system_dir: Path) -> None:
     """Estrae i file CHARMM36 dal tarball in /tmp/charmm36.tgz nella directory system
     del job, così che gmx grompp possa trovare forcefield.itp ecc."""
 
-    tar_path = Path.home() / ".local" / "share" / "cgui-studio" / "charmm36.tgz"
+    tar_path = paths.data_dir() / "charmm36.tgz"
     target_dir = system_dir / "charmm36.ff"
 
     if target_dir.exists():
@@ -1783,10 +1783,9 @@ def _extract_charmm36_ff(system_dir: Path) -> None:
     if intermediate.exists():
         shutil.rmtree(str(intermediate))
 
-    # Copia lipid.rtp nella directory system (provenance output; usato da
-    # generate_top come reference. Fonte: ~/.local/share/cgui-studio/,
-    # NON path temporanei di /tmp).
-    lipid_rtp_src = Path.home() / ".local" / "share" / "cgui-studio" / "lipid.rtp"
+    # Copia lipid.rtp nella directory system (provenance output). Fonte:
+    # data_dir() (default ~/.local/share/cgui-studio su Linux), mai path /tmp.
+    lipid_rtp_src = paths.data_dir() / "lipid.rtp"
     if lipid_rtp_src.exists():
         shutil.copy(str(lipid_rtp_src), str(system_dir / "lipid.rtp"))
 
@@ -2767,12 +2766,15 @@ def main(argv: list[str] | None = None) -> int:
     system_dir.mkdir(parents=True, exist_ok=True)
     progress_path = system_dir / "progress.json"
     progress = ProgressWriter(progress_path, steps)
+    # il prepare include generate_pdb (lento su sistemi grandi): lo marchio
+    # active SUBITO, altrimenti la UI resta tutto "pending" durante il calcolo.
+    progress.mark(STEP_PREPARE, "active")
 
     # Estrai i file CHARMM36 (forcefield) per grompp
     _extract_charmm36_ff(system_dir)
 
     # Copia lipid.rtp nella directory system (provenance output).
-    lipid_rtp_src = Path.home() / ".local" / "share" / "cgui-studio" / "lipid.rtp"
+    lipid_rtp_src = paths.data_dir() / "lipid.rtp"
     if lipid_rtp_src.exists():
         shutil.copy(str(lipid_rtp_src), str(system_dir / "lipid.rtp"))
 
