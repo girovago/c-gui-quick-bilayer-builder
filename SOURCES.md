@@ -59,7 +59,7 @@ Usati per dimensionare i foglietti con densità fisica (`APL_NM2` in `scripts/ma
 
 ### Trajectory kit (trajkit)
 
-Progetto separato in `/home/giorgio/Documenti/trajkit` — CLI per analisi traiettorie MD (info, rmsd, rmsf, rg, sasa, hbonds, ligdist, convert, report).
+Progetto sibling (`trajkit`) — CLI per analisi traiettorie MD (info, rmsd, rmsf, rg, sasa, hbonds, ligdist, convert, report).
 
 Backend: mdtraj + MDAnalysis + numpy puro.
 

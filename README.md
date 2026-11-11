@@ -212,15 +212,15 @@ bash miniforge.sh -b -p ~/miniforge3
 ### Project installation
 
 ```bash
-cd /home/giorgio/Documenti/cgui-studio
+cd cgui-studio
 uv run python scripts/make_bilayer.py --help
 ```
 
 For the web GUI:
 
 ```bash
-cd web && PATH=/home/giorgio/.local/node24/bin:$PATH npm install
-PATH=/home/giorgio/.local/node24/bin:$PATH npm run build
+cd web && npm install
+npm run build
 cd ..
 CGUI_MOCK=1 uv run cgui serve --port 8756
 ```
@@ -230,7 +230,7 @@ CGUI_MOCK=1 uv run cgui serve --port 8756
 ## Tests and verification
 
 ```bash
-cd /home/giorgio/Documenti/cgui-studio
+cd cgui-studio
 
 # Python tests
 uv run pytest -q
@@ -239,7 +239,7 @@ uv run pytest -q
 uv run ruff check .
 
 # Frontend build
-cd web && PATH=/home/giorgio/.local/node24/bin:$PATH npm run build
+cd web && npm run build
 cd ..
 
 # Local builder test (charged membrane, tests genion + metrics)
