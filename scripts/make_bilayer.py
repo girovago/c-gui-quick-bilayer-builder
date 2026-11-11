@@ -2176,11 +2176,14 @@ def _gmx_pipeline(
     if not do_solvate:
         print("gmx solvate saltato (--solvate non richiesto): file boxed.gro pronto")
         minim_tpr = str((system_dir / "minim.tpr").resolve())
+        _mark(STEP_GROMPP, "active")
         r = _gmx(["grompp", "-maxwarn", "50", "-f", mdp_path, "-c", boxed_gro,
                   "-p", top_abs, "-o", minim_tpr])
         if r.returncode != 0:
+            _mark(STEP_GROMPP, "error", "grompp fallito")
             print(f"AVVISO: gmx grompp fallito: {r.stderr[-500:]}", file=sys.stderr)
             return False
+        _mark(STEP_GROMPP, "done")
         print("gmx grompp: OK - minim.tpr pronto")
         if not minimize:
             print("gmx mdrun saltato (no --minimize): sistema pronto")
