@@ -427,18 +427,26 @@ def test_e2e_pdb2gmx_grompp_popc_chol(real_lipid_rtp, tmp_path: Path):
     tpr_path = system_dir / "minim.tpr"
     assert top_path.exists()
     assert tpr_path.exists(), "minim.tpr non generato (grompp fallito)"
+    # pdb2gmx (GROMACS >=2020) scrive le moleculetype lipidiche in itp
+    # separati (topol_<specie>.itp): i bond stanno lì, non in topol.top.
     top_text = top_path.read_text()
-    assert "[ bonds ]" in top_text
+    itp_files = list(system_dir.glob("topol_*.itp"))
+    assert itp_files, "nessun topol_*.itp generato da pdb2gmx"
+    combined = top_text + "\n".join(
+        p.read_text() for p in itp_files
+    )
+    assert "[ bonds ]" in combined
     # la sezione [ bonds ] deve contenere almeno un bond
     in_bonds = False
     n_bonds = 0
-    for line in top_text.splitlines():
+    for line in combined.splitlines():
         if line.strip() == "[ bonds ]":
             in_bonds = True
             continue
         if in_bonds:
             if line.strip().startswith("["):
-                break
+                in_bonds = False
+                continue
             s = line.strip()
             if s and not s.startswith(";"):
                 n_bonds += 1

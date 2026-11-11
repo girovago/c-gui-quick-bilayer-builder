@@ -1513,9 +1513,14 @@ def _ensure_top_molecules(top_path: Path, gro_path: str,
                           upper: dict[str, int], lower: dict[str, int]) -> None:
     """Riscrive la sezione [molecules] del .top basandosi sul .gro ionizzato.
 
-    solvate -p e genion -p possono creare sezioni [molecules] duplicate o
-    errate. Questa funzione le rimuove tutte e ne inserisce una sola corretta
-    dopo [system], come richiesto da GROMACS.
+    Le moleculetype lipidiche (e le proteine) sono PRESERVATE con i conteggi
+    generati da pdb2gmx: con una chain per specie, la moleculetype della
+    specie contiene TUTTI i residui della catena e deve comparire UNA sola
+    volta in [molecules] (ricontare upper+lower creava un doppio conteggio
+    fatale per grompp). Solo solvente e ioni vengono ricontati dal .gro
+    (solvate/genion li aggiungono DOPO pdb2gmx). Nel fallback scheletro
+    (pdb2gmx assente) le righe per-specie di generate_top restano intatte.
+    La sezione viene riportata a un'unica occurrence dopo [system].
     """
     gro_counts = _count_gro_residues(gro_path)
     n_sol = gro_counts.get("SOL", 0)
@@ -1523,18 +1528,6 @@ def _ensure_top_molecules(top_path: Path, gro_path: str,
     n_cl = gro_counts.get("CL", 0)
 
     needed: dict[str, int] = {}
-    for name in sorted(set(upper) | set(lower)):
-        rtp_name = LIPID_NAME_MAP.get(name, name)
-        total_count = upper.get(name, 0) + lower.get(name, 0)
-        if total_count > 0:
-            needed[rtp_name] = total_count
-    if n_sol > 0:
-        needed["SOL"] = n_sol
-    if n_na > 0:
-        needed["NA"] = n_na
-    if n_cl > 0:
-        needed["CL"] = n_cl
-
     with open(top_path) as f:
         lines = f.readlines()
 
@@ -1549,40 +1542,36 @@ def _ensure_top_molecules(top_path: Path, gro_path: str,
             mol_idx = i
             break
 
-    # Preserva le molecole non-lipidi/solvente già in [molecules]
-    # (es. Protein_chain_X da embed_protein): devono restare PRIMA dei
-    # lipidi perché nel PDB/gro l'ordine è proteina → lipidi → solvente.
-    KNOWN_NON_PROTEIN = {"SOL", "NA", "CL", "K"} | {
-        LIPID_NAME_MAP.get(n, n) for n in set(upper) | set(lower)
-    }
-    preserved: dict[str, int] = {}
+    # Preserva le molecole non-solvente/ioni già in [molecules]: lipidi
+    # rinominati da pdb2gmx (conteggio 1 per chain-specie) e proteine
+    # (Protein_chain_X da pdb2gmx/embed_protein).
     if mol_idx is not None:
         j = mol_idx + 1
         while j < len(lines):
             stripped = lines[j].strip()
             if stripped == "" or stripped.startswith("[") or stripped.startswith(";"):
-                if stripped.startswith("[") :
+                if stripped.startswith("["):
                     break
                 j += 1
                 continue
             parts = stripped.split()
-            if len(parts) >= 2:
-                name, count = parts[0], parts[1]
-                # Preservo solo molecole effettivamente presenti nel gro
-                # (es. Protein_chain_X da embed_protein); scarto residui
-                # strani (es. "Other_chain_U/L" da chain del PDB lipidi)
-                # che non hanno corrispondenza nel gro.
-                if name not in KNOWN_NON_PROTEIN and name in gro_counts:
-                    try:
-                        preserved[name] = preserved.get(name, 0) + int(count)
-                    except ValueError:
-                        pass
+            if len(parts) >= 2 and parts[0] not in ("SOL", "NA", "CL", "K"):
+                try:
+                    count = int(parts[1])
+                except ValueError:
+                    pass
+                else:
+                    needed[parts[0]] = needed.get(parts[0], 0) + count
             j += 1
             # fine sezione = riga vuota dopo gli entry
             if stripped == "":
                 break
-    for name, count in preserved.items():
-        needed[name] = count
+    if n_sol > 0:
+        needed["SOL"] = n_sol
+    if n_na > 0:
+        needed["NA"] = n_na
+    if n_cl > 0:
+        needed["CL"] = n_cl
 
     if sys_idx is not None:
         # Trova la fine di [system] (riga vuota o prossima sezione [])
@@ -1976,19 +1965,79 @@ def patch_top_with_protein(
     return "\n".join(out) + "\n"
 
 
-def _write_pdb_uniform_chain(src_pdb: str, dst_pdb: str, chain: str = "A") -> None:
-    """Copia un PDB impostando la colonna chain (indice 21) a `chain` per
-    tutte le righe ATOM/HETATM.
+def _plan_lipid_chains(pdb_text: str, upper: dict[str, int],
+                       lower: dict[str, int]) -> dict[str, str]:
+    """Assegna una chain PDB per specie lipidica: {rtp_name: chain_letter}.
 
-    Serve a pdb2gmx: senza questo passo i lipidi con chain "U"/"L" verrebbero
-    trattati come catene molecolari distinte, frammentando le [moleculetype].
+    pdb2gmx crea UNA moleculetype per catena contenente tutti i residui
+    della catena. Con una chain per specie si ottiene quindi una
+    moleculetype per specie (i residui della stessa specie restano nella
+    stessa moleculetype e il conteggio [ molecules ] e' 1) e le specie
+    diverse NON vengono fuse nella stessa moleculetype (col vecchio
+    uniform-chain "A" accadeva). Le catene non-lipidiche presenti nel PDB
+    (es. proteina) mantengono la loro lettera: alle specie vengono date
+    lettere libere, in ordine alfabetico di rtp_name.
     """
-    with open(src_pdb) as f, open(dst_pdb, "w") as out:
+    lipid_set = {LIPID_NAME_MAP.get(s, s).upper() for s in set(upper) | set(lower)}
+    used: set[str] = set()
+    for line in pdb_text.splitlines():
+        if line.startswith(("ATOM", "HETATM")) and len(line) >= 22:
+            # resname: col 18-20 (3 char) oppure 17-20 (4 char, es. POPC):
+            # estraggo 16:21 e strip per coprire entrambi gli allineamenti.
+            resname = line[16:21].strip().upper()
+            if resname not in lipid_set:
+                used.add(line[21])
+    mapping: dict[str, str] = {}
+    for species in sorted(lipid_set):
+        for code in range(ord("A"), ord("Z") + 1):
+            letter = chr(code)
+            if letter not in used:
+                mapping[species] = letter
+                used.add(letter)
+                break
+        else:
+            raise ValueError(
+                f"più di {len(used)} specie lipidiche: lettere chain PDB esaurite"
+            )
+    return mapping
+
+
+def _write_pdb_species_chains(src_pdb: str, dst_pdb: str,
+                              mapping: dict[str, str]) -> None:
+    """Riscrive la colonna chain delle righe ATOM/HETATM secondo la mappa
+    {rtp_name: chain} (una chain per specie lipidica) e RAGGRUPPA le
+    catene in modo contiguo (sort stabile per chain).
+
+    La contiguita' e' essenziale: se la stessa specie compare in entrambi
+    i foglietti, i suoi atomi sono separati nel PDB originale; pdb2gmx
+    tratterebbe i segmenti come catene distinte e genererebbe moleculetype
+    duplicate ("Other_chain_A" + "Other_chain_A2"). Le righe di altre
+    molecole (proteina) mantengono la chain originale.
+    """
+    header: list[str] = []
+    atoms: list[tuple[str, str]] = []
+    trailer: list[str] = []
+    with open(src_pdb) as f:
         for line in f:
             if line.startswith(("ATOM", "HETATM")) and len(line) > 21:
-                out.write(line[:21] + chain + line[22:])
+                # vedi _plan_lipid_chains: resname 3 o 4 char
+                resname = line[16:21].strip().upper()
+                chain = mapping.get(resname)
+                new_line = line[:21] + chain + line[22:] if chain else line
+                cur_chain = chain if chain is not None else (
+                    new_line[21] if len(new_line) > 21 else " "
+                )
+                atoms.append((cur_chain, new_line))
+            elif atoms:
+                if not line.startswith("TER"):
+                    trailer.append(line)
             else:
-                out.write(line)
+                header.append(line)
+    atoms.sort(key=lambda t: t[0])  # stabile: ordine dentro la chain invariato
+    with open(dst_pdb, "w") as out:
+        out.writelines(header)
+        out.writelines(row for _, row in atoms)
+        out.writelines(trailer)
 
 
 def _run_pdb2gmx(
@@ -1997,6 +2046,7 @@ def _run_pdb2gmx(
     pdb_abs: str,
     top_abs: str,
     ff_dir: str | None,
+    chain_map: dict[str, str] | None = None,
 ) -> tuple[bool, str]:
     """Esegue gmx pdb2gmx per generare la topologia completa (bonds/angles/
     dihedrals/cmap) dal PDB + charmm36 jul2022 ff.
@@ -2011,12 +2061,15 @@ def _run_pdb2gmx(
         return False, pdb_abs
     step3_pdb = str((system_dir / "step3.pdb").resolve())
     posres = str((system_dir / "posres.itp").resolve())
-    # pdb2gmx tratta i residui con chain diverse come molecole distinte.
-    # I lipidi del builder hanno chain "U"/"L" (foglietto superiore/inferiore):
-    # le omogenizzo a "A" in una copia temporanea così pdb2gmx vede un'unica
-    # molecola per resname (POPC, CHL1, ...) e genera [moleculetype] corrette.
+    # pdb2gmx crea una moleculetype per catena. I lipidi del builder hanno
+    # chain "U"/"L" (foglietto superiore/inferiore): le riorganizzo a UNA
+    # CHAIN PER SPECIE (POPC→B, CHL1→C, ...) cosicche' pdb2gmx generi una
+    # moleculetype per specie e le specie diverse restino separate.
+    if chain_map is None:
+        with open(pdb_abs) as f:
+            chain_map = _plan_lipid_chains(f.read(), {}, {})
     pdb_for_pdb2gmx = str((system_dir / "pdb_for_pdb2gmx.pdb").resolve())
-    _write_pdb_uniform_chain(pdb_abs, pdb_for_pdb2gmx, chain="A")
+    _write_pdb_species_chains(pdb_abs, pdb_for_pdb2gmx, chain_map)
     # GROMACS >=2020: pdb2gmx NON ha -dir; si indica la dir del ff tramite
     # GMXLIB (charmm36.ff/ deve essere contenuta in ff_dir).
     pdb2gmx_env = {"GMXLIB": str(ff_dir)}
@@ -2031,76 +2084,122 @@ def _run_pdb2gmx(
               f"{r.stderr[-600:]}", file=sys.stderr)
         return False, pdb_abs
     print("gmx pdb2gmx: OK - topologia completa generata")
-    # pdb2gmx chiama le moleculetype lipidiche "Other_chain_A" (non usa il
-    # nome rtp). Le rinomino col nome del residuo (POPC, CHL1, ...) cosicche'
+    # pdb2gmx chiama le moleculetype lipidiche "Other_chain_X" (X = chain
+    # della specie). Le rinomino col nome rtp della specie cosicche'
     # [ molecules ] e le moleculetype coincidano e grompp le trovi.
-    _fix_moleculetype_names(top_abs)
+    _rename_lipid_moleculetypes(top_abs, chain_map, system_dir=system_dir)
     return True, step3_pdb
 
 
-def _fix_moleculetype_names(top_path: str) -> None:
-    """Coerentezza tra [moleculetype] e [molecules] dopo pdb2gmx.
-
-    pdb2gmx, per residui non-standard (lipidi), chiama le moleculetype
-    "Other_chain_X" (X = chain), mentre [ molecules ] usa i nomi rtp
-    (POPC, CHL1, ...). grompp fallirebbe con "No such moleculetype POPC".
-    Qui aggiorno [ molecules ] cosicche' ogni lipide punti al nome
-    della moleculetype effettivamente generata da pdb2gmx
-    (es. "Other_chain_A"), senza toccare le [moleculetype] (complete di
-    bonds/angles/dihedrals). I nomi dei lipidi diversi con la stessa chain
-    rischiano di collidere (entrambe "Other_chain_A"); in tal caso grompp
-    segnala moleculetype duplicata e il sistema resta grompp-incompatibile
-    (fallback onesto: il top scheletro resta disponibile).
+def _rename_pdb2gmx_files(system_dir: Path,
+                          chain_map: dict[str, str]) -> None:
+    """Rinomina i file itp per-moleculetype generati da pdb2gmx
+    (GROMACS >=2020): topol_Other_chain_X.itp → topol_<specie>.itp e
+    posres_Other_chain_X.itp → posres_<specie>.itp, aggiornando dentro
+    l'itp il nome della moleculetype e l'#include del posres.
     """
+    for species, chain in chain_map.items():
+        old_mt = system_dir / f"topol_Other_chain_{chain}.itp"
+        if old_mt.is_file():
+            text = old_mt.read_text(encoding="utf-8")
+            # nome moleculetype (prima riga di codice del blocco)
+            text = re.sub(
+                rf"(?m)^(\s*)Other_chain_{chain}\b",
+                rf"\g<1>{species}", text, count=1,
+            )
+            # include del posres (relativo o assoluto: tocco il basename)
+            text = text.replace(
+                f"posres_Other_chain_{chain}.itp", f"posres_{species}.itp"
+            )
+            old_mt.write_text(text, encoding="utf-8")
+            os.replace(old_mt, system_dir / f"topol_{species}.itp")
+        old_pos = system_dir / f"posres_Other_chain_{chain}.itp"
+        if old_pos.is_file():
+            os.replace(old_pos, system_dir / f"posres_{species}.itp")
+
+
+def _rename_lipid_moleculetypes(top_path: str,
+                                chain_map: dict[str, str],
+                                system_dir: Path | None = None) -> None:
+    """Rinomina le moleculetype lipidiche generate da pdb2gmx
+    ("Other_chain_X", X = chain della specie) col nome rtp della specie.
+
+    pdb2gmx (GROMACS >=2020) puo' scrivere ogni moleculetype in un file
+    separato (topol_Other_chain_X.itp + posres_Other_chain_X.itp) incluso
+    da topol.top: se system_dir e' fornito, rinomina ANCHE quei file e i
+    loro #include. In topol.top rinomina i blocchi [ moleculetype ] inline
+    e le righe [ molecules ].
+
+    La mappa {rtp_name: chain} e' la stessa usata per riscrivere le chain
+    del PDB prima di pdb2gmx (_plan_lipid_chains). Idempotente: le righe
+    gia' rinominate (o non-lipidiche) restano invariate.
+    """
+    if system_dir is not None:
+        _rename_pdb2gmx_files(system_dir, chain_map)
+    chain_to_species = {v: k for k, v in chain_map.items()}
+
+    def rename_name(name: str) -> str | None:
+        if not name.startswith("Other_chain_"):
+            return None
+        chain = name[len("Other_chain_"):]
+        if len(chain) == 1 and chain in chain_to_species:
+            return chain_to_species[chain]
+        return None
+
     with open(top_path) as f:
         lines = f.readlines()
 
-    # Trovo il nome della (prima) moleculetype lipidica generata da pdb2gmx
-    # (quella che NON e' SOL/NA/CL/K e ha una sezione [ atoms ]).
-    lipid_mt_name = None
-    i = 0
     n = len(lines)
-    while i < n:
-        s = lines[i].strip()
-        if s == "[ moleculetype ]":
-            # nome nella riga dopo
-            j = i + 1
-            name = None
-            while j < n and not lines[j].strip().startswith("["):
-                if lines[j].strip() and not lines[j].strip().startswith(";"):
-                    name = lines[j].strip().split()[0]
-                    break
-                j += 1
-            # se non e' un solvente/ione noto, e' un lipide (o proteina)
-            if name and name not in ("SOL", "NA", "CL", "K", "tip3p", "ions"):
-                lipid_mt_name = name
-                break
-        i += 1
-
-    if not lipid_mt_name:
-        return  # niente da fare
-
-    # Aggiorno [ molecules ]: sostituisco i nomi lipidi (rtp) con lipid_mt_name.
+    # include dei file itp rinominati (relativi in topol.top):
+    # topol_Other_chain_X.itp → topol_<specie>.itp
+    for species, chain in chain_map.items():
+        lines = [
+            ln.replace(f"topol_Other_chain_{chain}.itp",
+                       f"topol_{species}.itp")
+            for ln in lines
+        ]
     out: list[str] = []
     i = 0
     while i < n:
-        s = lines[i].strip()
+        line = lines[i]
+        s = line.strip()
+        if s == "[ moleculetype ]":
+            out.append(line)
+            i += 1
+            # nome della moleculetype nella prima riga utile
+            while i < n:
+                row = lines[i]
+                ss = row.strip()
+                if ss.startswith("[") and ss.endswith("]"):
+                    break
+                if ss and not ss.startswith(";"):
+                    parts = ss.split()
+                    if parts:
+                        new = rename_name(parts[0])
+                        if new is not None:
+                            lines[i] = row.replace(parts[0], new, 1)
+                    break
+                out.append(row)
+                i += 1
+            continue
         if s == "[ molecules ]":
-            out.append(lines[i])
+            out.append(line)
             i += 1
             while i < n:
                 row = lines[i]
                 ss = row.strip()
-                if ss.startswith("[") and ss.endswith("]") and ss != "[ molecules ]":
+                if ss.startswith("[") and ss.endswith("]"):
                     break
-                if ss and not ss.startswith(";") and not ss.startswith("["):
+                if ss and not ss.startswith(";"):
                     parts = ss.split()
-                    if len(parts) >= 2 and parts[0] not in ("SOL", "NA", "CL", "K"):
-                        row = row.replace(parts[0], lipid_mt_name, 1)
+                    if parts:
+                        new = rename_name(parts[0])
+                        if new is not None:
+                            row = row.replace(parts[0], new, 1)
                 out.append(row)
                 i += 1
             continue
-        out.append(lines[i])
+        out.append(line)
         i += 1
 
     with open(top_path, "w") as f:
@@ -2146,9 +2245,15 @@ def _gmx_pipeline(
             progress.mark(step_id, status, error)
 
     # --- pdb2gmx: topologia completa dal PDB + charmm36 ff ---
+    # Una chain PDB per specie lipidica (POPC→B, CHL1→C, ...): pdb2gmx
+    # genera una moleculetype per specie; la mappa serve poi a rinominare
+    # le "Other_chain_X" col nome rtp e a tenere coerente [ molecules ].
+    with open(pdb_abs) as f:
+        chain_map = _plan_lipid_chains(f.read(), upper, lower)
     _mark(STEP_PDB2GMX, "active")
     pdb2gmx_ok, pdb_for_editconf = _run_pdb2gmx(gmx_path, system_dir,
-                                                pdb_abs, top_abs, ff_dir)
+                                                pdb_abs, top_abs, ff_dir,
+                                                chain_map=chain_map)
     if not pdb2gmx_ok:
         _mark(STEP_PDB2GMX, "error", "pdb2gmx fallito")
         print("  -> procedo con topologia SCHELETRO (grompp fallira' senza "
@@ -2200,7 +2305,7 @@ def _gmx_pipeline(
         return False
     _mark(STEP_SOLVATE, "done")
     print("gmx solvate: OK")
-    _fix_moleculetype_names(top_abs)
+    _rename_lipid_moleculetypes(top_abs, chain_map, system_dir=system_dir)
 
     # --- Ioni: grompp preliminare → genion (neutralizza + conc) ---
     tpr_ion = str((system_dir / "ion.tpr").resolve())
@@ -2230,7 +2335,7 @@ def _gmx_pipeline(
     # qualcosa, lo aggiungiamo manualmente basandoci sul .gro ionizzato.
     _ensure_top_molecules(Path(top_abs), ionized_gro, upper, lower)
     # _ensure_top_molecules riscrive il top: rieseguo il fix nomi moleculetype
-    _fix_moleculetype_names(top_abs)
+    _rename_lipid_moleculetypes(top_abs, chain_map, system_dir=system_dir)
 
     minim_tpr = str((system_dir / "minim.tpr").resolve())
     _mark(STEP_GROMPP, "active")
