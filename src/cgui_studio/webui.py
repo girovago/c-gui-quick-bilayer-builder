@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -35,6 +36,12 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, ValidationError
+
+# make_bilayer è uno script stdlib in scripts/ (importabile, come fanno i test)
+_scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+if str(_scripts_dir) not in sys.path:
+    sys.path.insert(0, str(_scripts_dir))
+from make_bilayer import outdir_for, parse_spec, STEP_LABELS, STEP_PREPARE  # noqa: E402
 
 from . import updates
 from .client import ApiError, AuthError, CguiError, Client, JobError, fetch_job
@@ -196,6 +203,56 @@ def _python_cmd(extra: list[str]) -> list[str]:
     if conda:
         return [conda, "run", "-n", "cgui-builder", "python"] + extra
     return [sys.executable] + extra
+
+
+# Build locali in volo: jobid -> thread (il server resta reattivo durante l'esecuzione).
+_build_threads: dict[str, threading.Thread] = {}
+
+
+def _run_build_async(
+    payload: MakeBilayerInput,
+    jobid: str,
+    outdir_path: Path,
+    store: JobStore,
+) -> None:
+    """Esegue make_bilayer.py in background e aggiorna lo store a done/error."""
+    script = Path(__file__).resolve().parents[2] / "scripts" / "make_bilayer.py"
+    base_out = default_results_dir()
+    cmd = _python_cmd([str(script), "--output", str(base_out)])
+    if payload.spec:
+        cmd += ["--spec", payload.spec]
+    if payload.upper:
+        cmd += ["--upper", payload.upper]
+    if payload.lower:
+        cmd += ["--lower", payload.lower]
+    if payload.run_gmx:
+        cmd += ["--run-gmx"]
+    if payload.box_x is not None:
+        cmd += ["--box-x", str(payload.box_x)]
+    if payload.box_y is not None:
+        cmd += ["--box-y", str(payload.box_y)]
+    if payload.box_z is not None:
+        cmd += ["--box-z", str(payload.box_z)]
+    if payload.center is not None and not payload.center:
+        cmd += ["--no-center"]
+    if payload.layout:
+        cmd += ["--layout", payload.layout]
+    if payload.solvent:
+        cmd += ["--solvent", payload.solvent]
+    if payload.ions in ("KCl", "NaCl"):
+        cmd += ["--ion-type", payload.ions, "--ion-conc", "0.15"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        store.update(jobid, state="error", error="make_bilayer timeout")
+        return
+    except Exception as exc:  # noqa: BLE001 - build fallito, segnalo nello store
+        store.update(jobid, state="error", error=str(exc))
+        return
+    if res.returncode != 0:
+        store.update(jobid, state="error", error=res.stderr[-800:])
+        return
+    store.update(jobid, state="done", outdir=str(outdir_path))
 
 
 def create_app(
@@ -370,9 +427,16 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     def job_detail(jobid: str) -> dict[str, Any]:
         _record_or_404(store, jobid)
         if jobid.startswith("local-"):
-            # Job generato in locale: stato "done" simulato, niente client CHARMM-GUI.
-            st = JobStatus(status="done", rank="locale", last_inp_step=0, has_tar=False, error=None)
+            # Job generato in locale: lo stato è nello store (running/done/error),
+            # niente client CHARMM-GUI.
             record = _record_or_404(store, jobid)
+            st = JobStatus(
+                status=record.state or "done",
+                rank="locale",
+                last_inp_step=record.last_step or 0,
+                has_tar=False,
+                error=record.error,
+            )
         else:
             with _map_errors(app.state.mock):
                 st = client.status(jobid)
@@ -470,74 +534,28 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
     def make_bilayer(payload: MakeBilayerInput) -> dict[str, Any]:
         """Genera una struttura bilayer all-atom in locale (GROMACS-compatibile).
 
-        Esegue scripts/make_bilayer.py dentro l'ambiente conda `cgui-builder`
-        (Python 3.12, GROMACS 2026.3, mdtraj/MDAnalysis) e registra il risultato
-        come job `local-<ts>` nello store: stato "done", outdir assoluto, così
-        le rotte /api/files/{jobid} e il dettaglio funzionano come per i job
-        CHARMM-GUI reali.
+        L'esecuzione è asincrona: la risposta restituisce subito il jobid con
+        stato "running". Il client fa polling su GET /api/jobs/{jobid}/progress
+        (ogni ~1s) per vedere i step avanzare, invece di uno spinner cieco.
+        Quando il build finisce, il thread di background aggiorna lo store a
+        done/error e il job appare nella lista a destra.
         """
         script = Path(__file__).resolve().parents[2] / "scripts" / "make_bilayer.py"
         if not script.exists():
             raise HTTPException(500, f"script non trovato: {script}")
         base_out = default_results_dir()
-        cmd = _python_cmd([str(script), "--output", str(base_out)])
+
+        # Outdir nota prima di lanciare (uguale a quella usata da make_bilayer.main),
+        # così si può registrare il job e leggere il progress durante l'esecuzione.
         if payload.spec:
-            cmd += ["--spec", payload.spec]
-        if payload.upper:
-            cmd += ["--upper", payload.upper]
-        if payload.lower:
-            cmd += ["--lower", payload.lower]
-        if payload.run_gmx:
-            cmd += ["--run-gmx"]
-        # controlli fisici del launcher: passati allo script per generazione effettiva
-        if payload.box_x is not None:
-            cmd += ["--box-x", str(payload.box_x)]
-        if payload.box_y is not None:
-            cmd += ["--box-y", str(payload.box_y)]
-        if payload.box_z is not None:
-            cmd += ["--box-z", str(payload.box_z)]
-        if payload.center is not None and not payload.center:
-            cmd += ["--no-center"]
-        if payload.layout:
-            cmd += ["--layout", payload.layout]
-        if payload.solvent:
-            cmd += ["--solvent", payload.solvent]
-        if payload.ions in ("KCl", "NaCl"):
-            cmd += ["--ion-type", payload.ions, "--ion-conc", "0.15"]
-        # Nuovi campi per proteine, acidi nucleici, small molecules
-        if payload.build_type:
-            cmd += ["--build-type", payload.build_type]
-        if payload.protein_pdb_id:
-            cmd += ["--pdb", payload.protein_pdb_id]
-        if payload.dna_sequence:
-            cmd += ["--dna", payload.dna_sequence]
-        if payload.rna_sequence:
-            cmd += ["--rna", payload.rna_sequence]
-        if payload.small_mol_file_name:
-            cmd += ["--small-mol", payload.small_mol_file_name]
+            s = parse_spec(payload.spec)
+            upper = lower = s
+        else:
+            upper = parse_spec(payload.upper or "")
+            lower = parse_spec(payload.lower or "")
+        outdir_path = outdir_for(base_out, upper, lower, None)
 
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        except subprocess.TimeoutExpired as exc:
-            raise HTTPException(504, f"make_bilayer timeout: {exc}") from exc
-
-        if res.returncode != 0:
-            raise HTTPException(502, f"make_bilayer fallito: {res.stderr[-800:]}")
-
-        outdir = None
-        for line in res.stdout.splitlines():
-            if line.startswith("Bilayer generato in: "):
-                outdir = line.split("Bilayer generato in: ", 1)[1].strip()
-                break
-        if not outdir:
-            raise HTTPException(502, f"outdir non trovato nell'output: {res.stdout[-500:]}")
-
-        outdir_path = Path(outdir)
-        system_dir = outdir_path / "system"
-
-        # Record nello store come job locale (stato "done", outdir assoluto).
-        # Le rotte /api/files/{jobid} e il dettaglio funzionano come per i job reali.
-        jobid = f"local-{int(datetime.now(UTC).timestamp())}"
+        jobid = f"local-{int(datetime.now(UTC).timestamp() * 1000)}"
         spec_in = {
             "spec": payload.spec,
             "upper": payload.upper,
@@ -545,7 +563,6 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             "run_gmx": payload.run_gmx,
             "source": "local",
         }
-        # provenance dei controlli fisici del launcher (box/layout/solvente)
         launcher_params = {
             "box_x": payload.box_x,
             "box_y": payload.box_y,
@@ -558,34 +575,75 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
             launcher_params["ions"] = payload.ions
             spec_in["launcher"] = launcher_params
         label = payload.spec or payload.upper or "locale"
-        try:
-            store.add(jobid, spec_in, label=label, state="done", outdir=str(outdir_path))
-        except CguiError:
-            jobid = f"local-{int(datetime.now(UTC).timestamp() * 1000)}"
-            store.add(jobid, spec_in, label=label, state="done", outdir=str(outdir_path))
+        store.add(jobid, spec_in, label=label, state="running", outdir=str(outdir_path))
 
-        files = []
-        if system_dir.is_dir():
-            for entry in sorted(system_dir.iterdir()):
-                if entry.is_file():
-                    files.append({"name": entry.name, "size": entry.stat().st_size})
-
-        manifest_path = outdir_path / "manifest.json"
-        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
-
-        # Metriche fisiche post-build (se calcolate)
-        metrics_path = system_dir / "metrics.json"
-        metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else None
+        t = threading.Thread(
+            target=_run_build_async,
+            args=(payload, jobid, outdir_path, store),
+            daemon=True,
+        )
+        t.start()
+        _build_threads[jobid] = t
 
         return {
             "jobid": jobid,
             "outdir": str(outdir_path),
-            "system_dir": str(system_dir),
-            "files": files,
-            "manifest": manifest,
-            "log": (res.stdout + "\n" + res.stderr).strip() or "nessun output",
-            "metrics": metrics,
+            "system_dir": str(outdir_path / "system"),
+            "state": "running",
+            "message": "build avviato: usa GET /api/jobs/{jobid}/progress per il avanzamento",
         }
+
+    @app.get("/api/jobs/{jobid}/progress")
+    def job_progress(jobid: str) -> dict[str, Any]:
+        """Progress di un build locale: legge progress.json nella outdir del job.
+
+        Per i job CHARMM-GUI reali (non local-*) il progress locale non esiste:
+        risponde 404 e la UI lo ignora.
+        """
+        if not jobid.startswith("local-"):
+            raise HTTPException(
+                404, "progress disponibile solo per build locali (job local-*)"
+            )
+        record = _record_or_404(store, jobid)
+        outdir = record.outdir
+        started_at = record.created_at or datetime.now(UTC).isoformat()
+        if not outdir:
+            # job creato ma outdir ancora non nota: step attivo sconosciuto ma valido
+            return {
+                "jobid": jobid,
+                "steps": [
+                    {"id": STEP_PREPARE, "label": STEP_LABELS[STEP_PREPARE], "status": "active"}
+                ],
+                "current": STEP_PREPARE,
+                "started_at": started_at,
+                "elapsed_s": 0.0,
+                "done": False,
+            }
+        progress_path = Path(outdir) / "system" / "progress.json"
+        if not progress_path.is_file():
+            # build avviato, file progress non ancora scritto: primo passo attivo
+            return {
+                "jobid": jobid,
+                "steps": [
+                    {"id": STEP_PREPARE, "label": STEP_LABELS[STEP_PREPARE], "status": "active"}
+                ],
+                "current": STEP_PREPARE,
+                "started_at": started_at,
+                "elapsed_s": 0.0,
+                "done": False,
+            }
+        try:
+            data = json.loads(progress_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {
+                "jobid": jobid,
+                "steps": [],
+                "current": None,
+                "started_at": started_at,
+                "elapsed_s": 0.0,
+                "done": False,
+            }
+        return data
 
     @app.post("/api/embed-protein")
     def embed_protein_endpoint(payload: EmbedProteinInput) -> dict[str, Any]:
