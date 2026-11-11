@@ -321,7 +321,7 @@ def _routes(app: FastAPI, client: Client | FakeClient, store: JobStore) -> None:
         da demo per la vista 3D quando non c'è un sistema reale estratto.
         """
         return Response(
-            content=bilayer_pdb_bytes(lipids_side=8),
+            content=bilayer_pdb_bytes(lipids_side=4),
             media_type="text/plain",
             headers={"X-Sample": "true", "Cache-Control": "no-store"},
         )

@@ -7,7 +7,12 @@
   let { jobid = null } = $props();
 
   let holder = $state(null);
-  let stage = $state(null);
+  // TRAPPOLA Svelte 5 (11/11/2026): lo Stage NGL NON va in $state — Svelte lo
+  // incapsula in un Proxy reattivo PROFONDO (gruppo di scena three.js, migliaia
+  // di oggetti atomo) e ogni accesso passa per il proxy = freeze del main
+  // thread. Variabile piena + flag $state "ready" solo per la reattività.
+  let stage = null;
+  let stageReady = $state(false);
   let state = $state("idle"); // idle | loading | ready | error
   let message = $state("");
   let showWater = $state(false);
@@ -53,7 +58,44 @@
       message = "NGL non disponibile (manca web/public/vendor/ngl.js)";
       return;
     }
-    stage = new window.NGL.Stage(holder, { backgroundColor: "#0b0f1a" });
+    // quality "low" esplicito (non "auto"): su iGPU vecchie (es. Intel HD 4400)
+    // auto può scegliere medium → rendering software → main thread in loop =
+    // popup "la pagina non risponde". Low = impostor semplici, sampleLevel 0.
+    stage = new window.NGL.Stage(holder, { backgroundColor: "#0b0f1a", quality: "low" });
+    // —— THROTTLE LOOP NGL (11/11/2026) —— NGL si ri-schedula a ogni frame e
+    // dopo 500ms esegue un render "still" supersamplato (sampleLevel 3): con
+    // WebGL software (iGPU vecchie, Firefox senza accelerazione) la CPU resta
+    // al 70-100% e il browser apre a raffica «la pagina non risponde».
+    // Fix DOPPIO:
+    //   1. il nostro animate replica NGL (tick signal + reschedule) ma SALTA
+    //      il render supersamplato: i frame normali passano per update()
+    //      (render-on-demand), l'unico che fissa il supersample è il branch
+    //      dentro animate() → rimosso, la scena resta identica ma senza il
+    //      task da molti secondi su SwiftShader;
+    //   2. a riposo (3s senza interazioni o tab nascosta) la catena rAF si
+    //      SPEGNE del tutto; si riaccende su interazione o nuova load.
+    const viewer = stage.viewer;
+    viewer.__paused = true; // parte in pausa finché la prima load non finisce
+    viewer.animate = () => {
+      if (viewer.__paused) return; // catena spenta: nessun rAF futuro
+      try {
+        viewer.signals.ticked.dispatch(viewer.stats);
+      } catch {}
+      viewer.frameRequest = window.requestAnimationFrame(viewer.animate);
+    };
+    stage.__resume = () => {
+      clearTimeout(viewer.__idleTimer);
+      if (viewer.__paused) { viewer.__paused = false; viewer.animate(); }
+      viewer.__idleTimer = setTimeout(() => (viewer.__paused = true), 3000);
+    };
+    stage.__pause = () => { clearTimeout(viewer.__idleTimer); viewer.__paused = true; };
+    const onVis = () => {
+      if (!stage || !stage.viewer) return;
+      if (document.hidden) stage.__pause();
+      else stage.__resume();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    stageReady = true; // abilita l'$effect di caricamento (stage è variabile piena, non reattiva)
     window.__ngl_stage = stage; // probe debug da tools.browser
     // su schermo stretto i controlli partono chiusi (il ⚙ li riapre)
     if (typeof window.innerWidth === "number" && window.innerWidth < 640) panelOpen = false;
@@ -61,6 +103,9 @@
     const hintTimer = setTimeout(() => (hint = false), 5000);
     return () => {
       clearTimeout(hintTimer);
+      clearTimeout(viewer.__idleTimer);
+      document.removeEventListener("visibilitychange", onVis);
+      stageReady = false;
       stage.removeAllComponents();
       stage.dispose();
       stage = null;
@@ -102,6 +147,7 @@
     const prev = style;
     style = name;
     note = "";
+    stage?.__resume?.();
     try {
       if (!compRef) return;
       if (name === "cartoon" && !hasProtein()) {
@@ -125,6 +171,7 @@
 
   function resetView() {
     if (compRef) compRef.autoView();
+    stage?.__resume?.();
   }
 
   function decorate(comp) {
@@ -159,6 +206,7 @@
   async function load(key, url) {
     if (!stage) return;
     lastRequested = key;
+    stage.__resume?.(); // serve il loop per l'animazione di ingresso
     stage.removeAllComponents();
     waterRepr = null;
     mainRepr = null;
@@ -175,8 +223,10 @@
         ...(url === SAMPLE || isLocal ? { ext: "pdb" } : {}),
       });
       if (key !== lastRequested) return; // sistema cambiato durante l'await: scarta
+      isSample = key === SAMPLE; // FIX 11/11: il badge sample spariva (load lo azzerava e non lo risettava)
       decorate(comp);
       state = "ready";
+      stage.__resume?.(); // autoView anima, poi il loop si spegne da solo (3s)
     } catch (e) {
       if (key !== lastRequested) return; // race: il messaggio vale solo per l'ultima richiesta
       state = "error";
@@ -188,10 +238,11 @@
     if (!hasSolvent || !waterRepr) return;
     showWater = !showWater;
     waterRepr.setVisibility(showWater);
+    stage?.__resume?.();
   }
 
   $effect(() => {
-    if (!stage) return;
+    if (!stageReady || !stage) return;
     if (jobid) {
       isSample = false; // il badge sparirà al load: il job reale è quello vero
       if (jobid === lastLoaded) return;

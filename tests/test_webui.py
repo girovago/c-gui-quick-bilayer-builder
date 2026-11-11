@@ -58,11 +58,11 @@ def test_sample_pdb_route(gui):
     lines = t.text.splitlines()
     atoms = [line for line in lines if line.startswith("ATOM")]
     # ~128 lipidi + acqua + ioni: migliaia di atomi ATOM
-    assert 8000 <= len(atoms) <= 20000
+    assert 4000 <= len(atoms) <= 20000  # sample ridotto a lipids_side=4 (fix viewer lento 11/11)
     assert atoms[0].startswith("ATOM")
     assert atoms[1].startswith("ATOM")
     # ~3 atomi testa POP per lipide: 128 lipidi totali (64+64)
-    assert sum(1 for ln in atoms if ln[17:20] == "POP") == 384
+    assert sum(1 for ln in atoms if ln[17:20] == "POP") == 96  # 4 lipidi per lato × 2 × 12 residui
     assert lines[-1] == "END"
     # deterministico: due chiamate → stesso contenuto
     assert t.text == gui[0].get("/api/sample/pdb").text
