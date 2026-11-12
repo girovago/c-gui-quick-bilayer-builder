@@ -644,7 +644,10 @@ def _classify_atoms(
         c0 = name[0]
         if c0 == "H":
             cat[name] = "H"
-        elif name == "P":
+        elif c0 == "P" and not _atype.startswith("C"):
+            # fosforo: nome P* con type NON-carbonio (P, PB, PA, P3/P4/P5 dei
+            # poly-PI: tutti type PC/PL/Px); il vecchio match == "P" lasciava
+            # PB/PA ecc. come "other" -> atomi mai piazzati -> missing degenere
             cat[name] = "P"
         elif c0 == "N":
             cat[name] = "N"
@@ -719,12 +722,13 @@ def _lipid_atom_lines(
     residue = LIPID_RTP_DATA.get(rtp_name)
 
     if residue is None:
-        # Residuo non in lipid.rtp: atomi generici con nomi semplici
+        # Residuo non in lipid.rtp: atomi generici in COLONNA lungo la
+        # normale (sovrapposti fallirebbero il guard geometrico)
         n_atoms = LIPID_ATOMS.get(resname, 15)
         for i in range(n_atoms):
             atom_name = f"C{i+1}"
-            # PDB standard = angstrom: coordinate interne (nm) x10
-            ox, oy, oz = _to_pdb_xyz(x, y, -z_head if mirror else z_head)
+            oz = (-z_head if mirror else z_head) - 0.16 * i
+            ox, oy, oz = _to_pdb_xyz(x, y, oz)
             lines.append(
                 f"ATOM  {len(lines)+1:5d} {atom_name:>4s} {resname:>4s}"
                 f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
@@ -764,8 +768,31 @@ def _lipid_atom_lines(
             z_p + dz,
         )
 
+    # --- Lipidi SENZA testa polare (acidi grassi, alcoli): ancoro alla COOH ---
+    fatty_starts: set[str] = set()
+    if not n_names and not head_o_list:
+        ester_os = sorted(n for n, c in cat.items() if c == "O_ester")
+        for k, oname in enumerate(ester_os):
+            az = 2 * math.pi * k / max(len(ester_os), 1) + 0.4
+            dz = 0.05 if k % 2 == 0 else -0.05
+            coords[oname] = (
+                x + BOND_PO * math.cos(az),
+                y + BOND_PO * math.sin(az),
+                z_head + dz,
+            )
+        anchors = sorted({p for oname in ester_os for p in nbrs.get(oname, []) if p[0] == "C"})
+        for aname in anchors:
+            coords[aname] = (x, y, z_head - 0.12)
+        # la BFS delle catene parte dai carboni ancora e dai loro vicini C
+        for aname in anchors:
+            fatty_starts.add(aname)
+            fatty_starts.update(
+                p for p in nbrs.get(aname, []) if cat.get(p) == "tail"
+            )
+
     # --- Catena da N (colina/ammine): BFS via soli C, si allarga attorno a N ---
     chain_extra_starts: set[str] = set()
+    chain_extra_starts |= fatty_starts
 
     def _subtree_size_c(atom: str, stop: set[str]) -> int:
         """Numero di C nel sottoalbero carbonioso da `atom` (esclude O/P/N)."""
@@ -956,6 +983,17 @@ def _lipid_atom_lines(
             coords[aname] = (x + 0.02, y + 0.10, z_p - 0.18)
         visited.add(aname)
 
+    # O_ester orfane (raggiunte da NESSUNA catena: es. la COOH terminale
+    # di ramo separato nel 23SM/sfingoidi): i loro C di aggancio diventano
+    # starts della BFS, altrimenti il ramo intero finisce negli offset
+    # "missing" degeneri (bug 12/11: OF-C2F a 0.424 A)
+    for oname in sorted(n for n, c in cat.items() if c == "O_ester"):
+        if oname in coords:
+            continue
+        for p in nbrs.get(oname, []):
+            if p[0] == "C" and cat.get(p) in ("tail", "anchor"):
+                chain_extra_starts.add(p)
+
     _bfs_chains()
 
     # --- Idrogeni: vicino al partner pesante (dal grafo) ---
@@ -972,13 +1010,55 @@ def _lipid_atom_lines(
         else:
             coords[name] = (x + 0.05, y + 0.05, z_head)
 
-    # --- Scrittura nell'ordine rtp ---
+    # --- Anti-clash intra-residuo: separazione iterativa ---
+    # La BFS generica puo' sovrapporre atomi pesanti (es. le due O della
+    # COOH degli acidi grassi, N/NF delle sfingoidi): frame degenere ->
+    # pdb2gmx costruisce H NaN. Pass semplice: per ogni coppia pesanti NON
+    # legate sotto MIN_HEAVY_NM li separo lungo la congiungente.
+    bonded_set = {(a, b) for a, b in residue.get("bonds", [])}
+    bonded_set |= {(b, a) for a, b in residue.get("bonds", [])}
+    heavy_names = [n for n in coords if not n.startswith("H")]
+    # --- Fill atomi mancanti (prima del resolver: il resolver deve vedere
+    # TUTTI i pesanti, incluse le O_ester orfane fin qui non piazzate) ---
     missing = 0
     for name, _atype, _charge, _group in atoms_info:
         if name not in coords:
             missing += 1
             coords[name] = (x + 0.03 * missing,
                             y + 0.03 * missing, z_head * 0.5)
+
+    # --- Anti-clash intra-residuo: separazione iterativa ---
+    # La BFS generica puo' sovrapporre atomi pesanti (es. le due O della
+    # COOH degli acidi grassi, O idrossil adiacenti): frame degenere ->
+    # pdb2gmx costruisce H NaN. Pass: per ogni coppia pesanti NON legate
+    # sotto MIN_HEAVY_DIST li separo lungo la congiungente.
+    bonded_set = {(a, b) for a, b in residue.get("bonds", [])}
+    bonded_set |= {(b, a) for a, b in residue.get("bonds", [])}
+    heavy_names = [n for n in coords if not n.startswith("H")]
+    for _round in range(40):
+        moved = False
+        for i, a in enumerate(heavy_names):
+            for b in heavy_names[i + 1:]:
+                if (a, b) in bonded_set:
+                    continue
+                ax, ay, az = coords[a]
+                bx, by, bz = coords[b]
+                dd = math.dist((ax, ay, az), (bx, by, bz))
+                if dd >= 0.09 or dd == 0.0:
+                    if dd == 0.0:
+                        coords[b] = (bx + 0.06, by, bz)
+                        moved = True
+                    continue
+                ux, uy, uz = (ax - bx) / dd, (ay - by) / dd, (az - bz) / dd
+                push = (0.09 - dd) / 2 + 0.01
+                coords[a] = (ax + push * ux, ay + push * uy, az + push * uz)
+                coords[b] = (bx - push * ux, by - push * uy, bz - push * uz)
+                moved = True
+        if not moved:
+            break
+
+    # --- Scrittura nell'ordine rtp ---
+    for name, _atype, _charge, _group in atoms_info:
         ox, oy, oz = coords[name]
         if mirror:
             oz = -oz
@@ -992,6 +1072,101 @@ def _lipid_atom_lines(
         )
 
     return lines
+
+
+# soglia clash intra-residuo pesanti: sotto questa distanza (0.09 nm) un frame
+# e' degenere e pdb2gmx puo' costruire idrogeni NaN (v. bug CHL1 12/11/2026)
+MIN_HEAVY_DIST_A = 0.9  # angstrom
+
+
+def _text_file_has_nan(path: str) -> bool:
+    """True se un file PDB/GRO contiene coordinate 'nan'.
+
+    PDB: solo righe ATOM/HETATM. GRO: tutte le righe tranne la prima
+    (titolo) e l'ultima (box) — una riga .gro con nan e' sempre un atomo.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return False
+    is_gro = path.endswith(".gro")
+    for line in lines:
+        if is_gro:
+            if line is lines[0] or line is lines[-1]:
+                continue
+        elif not line.startswith(("ATOM", "HETATM")):
+            continue
+        if "nan" in line.lower():
+            return True
+    return False
+
+
+def validate_pdb_geometry(
+    pdb_text: str,
+    bonds_by_name: dict[str, set[tuple[str, str]]] | None = None,
+) -> None:
+    """Guard sulla geometria del PDB generato.
+
+    Rigetta il build se contiene coordinate NaN o se atomi pesanti dello
+    STESSO residuo NON LEGATI sono a distanza < MIN_HEAVY_DIST_A: in quel
+    caso pdb2gmx termina con rc 0 ma produce idrogeni NaN, editconf
+    contamina tutto il boxed.gro e solvate esplode con errore fuorviante.
+    Meglio fallire qui con il resname e gli atomi colpiti.
+
+    bonds_by_name: {rtp_name: {(a,b), ...}} dei legami rtp — le coppie
+    legate sono escluse dal clash check (un C=O a 1.22 A e' legittimo).
+    """
+    pat = re.compile(r'(-?\d+\.\d{3})\s+(-?\d+\.\d{3})\s+(-?\d+\.\d{3})')
+    heavy: dict[tuple[str, str], list[tuple[str, tuple[float, float, float]]]] = {}
+    for line in pdb_text.splitlines():
+        if not line.startswith("ATOM"):
+            continue
+        if "nan" in line.lower():
+            raise RuntimeError(
+                "PDB generato contiene coordinate NaN: "
+                f"riga [{line[:60]}...] — geometria del lipide rotta, "
+                "segnalare il resname e fermare il build"
+            )
+        name = line[12:16].strip()
+        if name.startswith("H"):
+            continue
+        m = pat.search(line)
+        if not m:
+            continue
+        # il builder (e pdb2gmx) scrivono resname(+chain) e resno con spazi di
+        # padding a lunghezza variabile (rtp_name anche 6 char): le colonne
+        # fisse PDB NON valgono — tokenizzo l[17:]: [resname+chain, resno, x, y, z]
+        rest = line[17:].split()
+        if len(rest) < 2:
+            continue
+        key = (rest[0], rest[1])
+        heavy.setdefault(key, []).append((name, tuple(float(m.group(k)) for k in (1, 2, 3))))
+    for (token, resno), atoms in heavy.items():
+        # legami del rtp: il token PDB = resname+chain (chain 1 char in coda)
+        bonded: set[tuple[str, str]] = set()
+        if bonds_by_name:
+            rtp_name = max(
+                (r for r in bonds_by_name if token == r or token.startswith(r)),
+                key=len, default=None,
+            )
+            if rtp_name:
+                bonded = bonds_by_name[rtp_name]
+        for i in range(len(atoms)):
+            for j in range(len(atoms)):
+                if j <= i:
+                    continue
+                na, nb = atoms[i][0], atoms[j][0]
+                if (na, nb) in bonded or (nb, na) in bonded:
+                    continue  # coppie legate: distanze corte legittime
+                dd = math.dist(atoms[i][1], atoms[j][1])
+                if dd < MIN_HEAVY_DIST_A:
+                    raise RuntimeError(
+                        f"clash intra-residuo {token}#{resno}: "
+                        f"{na}-{nb} = {dd:.3f} A "
+                        f"(< {MIN_HEAVY_DIST_A}): geometria degenere, "
+                        "pdb2gmx genererebbe idrogeni NaN"
+                    )
 
 
 def generate_pdb(
@@ -1129,7 +1304,20 @@ def generate_pdb(
 
     lines.extend(body)
     lines.append("END")
-    return "\n".join(lines) + "\n"
+    pdb_text = "\n".join(lines) + "\n"
+    # guard: nan o clash intra-residuo (non legati) -> RuntimeError con
+    # dettagli; i bonds rtp servono per escludere le coppie legate
+    bonds_by_name: dict[str, set[tuple[str, str]]] = {}
+    for side in (upper, lower):
+        for lname in side:
+            rtp_name = LIPID_NAME_MAP.get(lname, lname)
+            res = LIPID_RTP_DATA.get(rtp_name)
+            if res and rtp_name not in bonds_by_name:
+                bonds_by_name[rtp_name] = {
+                    (a, b) for a, b in res.get("bonds", [])
+                }
+    validate_pdb_geometry(pdb_text, bonds_by_name)
+    return pdb_text
 
 
 def net_charge(upper: dict[str, int], lower: dict[str, int]) -> float:
@@ -2122,6 +2310,13 @@ def _run_pdb2gmx(
         print(f"AVVISO: gmx pdb2gmx fallito (topologia scheletro): "
               f"{r.stderr[-600:]}", file=sys.stderr)
         return False, pdb_abs
+    # guard: pdb2gmx con rc 0 puo' comunque scrivere idrogeni NaN (geometria
+    # degenere, bug CHL1 12/11) -> fermarsi QUI con il vero problema, prima
+    # che editconf contamini l'intero boxed.gro
+    if _text_file_has_nan(step3_pdb):
+        print("AVVISO: pdb2gmx ha scritto coordinate NaN in step3.pdb "
+              "(geometria lipidica degenere); build interrotto", file=sys.stderr)
+        return False, pdb_abs
     print("gmx pdb2gmx: OK - topologia completa generata")
     # pdb2gmx chiama le moleculetype lipidiche "Other_chain_X" (X = chain
     # della specie). Le rinomino col nome rtp della specie cosicche'
@@ -2312,6 +2507,11 @@ def _gmx_pipeline(
     if r.returncode != 0:
         _mark(STEP_EDITCONF, "error", "editconf fallito")
         print(f"AVVISO: gmx editconf fallito: {r.stderr[-500:]}", file=sys.stderr)
+        return False
+    if _text_file_has_nan(boxed_gro):
+        _mark(STEP_EDITCONF, "error", "editconf ha scritto coordinate NaN")
+        print("AVVISO: boxed.gro contiene NaN (input pdb con geometria "
+              "degenere); build interrotto", file=sys.stderr)
         return False
     _mark(STEP_EDITCONF, "done")
     print("gmx editconf: OK")

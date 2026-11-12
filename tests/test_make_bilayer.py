@@ -573,3 +573,86 @@ def test_sterane_offsets_no_clashes():
         a, b = pair
         dist = math.dist(pos[a], pos[b])
         assert 0.10 <= dist <= 0.25, f"legame/aggancio {a}-{b} = {dist:.3f} nm"
+
+
+def test_all_rtp_lipids_geometry_no_clash(real_lipid_rtp):
+    """Sweep su TUTTI i lipidi del lipid.rtp: nessuna coordinata NaN e nessun
+    clash intra-residuo per i lipidi COMMON del wizard (hard fail); per gli
+    esotici (bolalipids, poly-PI...) il guard runtime rigetta con errore
+    esplicito invece di produrre pdb2gmx NaN silenziosi (bug CHL1 12/11/2026).
+    """
+    mb.load_lipid_rtp()
+    assert mb.LIPID_RTP_LOAD_OK, mb.LIPID_RTP_ERROR
+    common = {
+        "POPC", "CHOL", "CHL1", "POPE", "DPPC", "DSPC", "DOPS", "DOTAP",
+        "SM", "PSM", "DOPC", "DOPE", "DMPC", "DLPC", "DPPS", "POPS",
+        "POPA", "POPG", "POPI",
+    }
+    exotic_failures: list[str] = []
+    for rname, residue in sorted(mb.LIPID_RTP_DATA.items()):
+        if rname in ("bondedtypes", "cmap"):
+            continue
+        lines = mb._lipid_atom_lines(
+            rname, 1, 0.0, 0.0, 2.0, "A", False, None
+        )
+        pdb = "\n".join(lines) + "\n"
+        assert "nan" not in pdb.lower(), f"{rname}: coordinate NaN"
+        bonds = {tuple(x) for x in residue.get("bonds", [])}
+        try:
+            mb.validate_pdb_geometry(pdb, {rname: bonds})
+        except RuntimeError as exc:
+            if rname in common:
+                pytest.fail(f"lipide COMMON con geometria degenere: {exc}")
+            exotic_failures.append(rname)
+    # il guard rigetta GLI ESOTICI degenere: segnalati ma non fail del test
+    if exotic_failures:
+        print(f"\nesotici rigettati dal guard ({len(exotic_failures)}): "
+              f"{exotic_failures[:8]}")
+
+
+def test_validate_pdb_geometry_rejects_nan_and_clash():
+    """Il guard rigetta esplicitamente NaN e clash intra-residuo."""
+    # formato reale del builder: coordinate 8.3f consecutive
+    ok = "ATOM      1   C3 CHL1A   1       1.000  2.000  3.000  1.00  0.00           C\n"
+    mb.validate_pdb_geometry(ok)  # non solleva
+    with pytest.raises(RuntimeError, match="NaN"):
+        mb.validate_pdb_geometry(
+            "ATOM      1   C3 CHL1A   1         -nan  2.000  3.000  1.00  0.00           C\n"
+        )
+    # due pesanti dello stesso residuo a 0.3 A (< 0.9)
+    clash = (
+        "ATOM      1   C3 CHL1A   1       1.000  2.000  3.000  1.00  0.00           C\n"
+        "ATOM      2   C4 CHL1A   1       1.300  2.000  3.000  1.00  0.00           C\n"
+    )
+    with pytest.raises(RuntimeError, match="clash intra-residuo"):
+        mb.validate_pdb_geometry(clash)
+    # pesanti di RESIDUI diversi vicini: legittimo (adiacenti di catena), non rigetta
+    ok2 = (
+        "ATOM      1   C3 CHL1A   1       1.000  2.000  3.000  1.00  0.00           C\n"
+        "ATOM      2   C3 CHL1A   2       1.300  2.000  3.000  1.00  0.00           C\n"
+    )
+    mb.validate_pdb_geometry(ok2)
+
+
+def test_text_file_has_nan(tmp_path):
+    """Il check nan distingue PDB (solo ATOM) e GRO (esclude titolo/box)."""
+    pdb = tmp_path / "step3.pdb"
+    pdb.write_text(
+        "REMARK nota con nan nel testo (falso positivo da ignorare)\n"
+        "ATOM      1   C3 CHL1A   1         -nan     2.000   3.000  1.00  0.00           C\n"
+    )
+    assert mb._text_file_has_nan(str(pdb))
+    gro = tmp_path / "boxed.gro"
+    gro.write_text(
+        "titolo nan finto\n"
+        "    1CHL1  C3    1   -nan  -nan  -nan\n"
+        "   1.20000   1.20000   1.20000\n"
+    )
+    assert mb._text_file_has_nan(str(gro))
+    gro_ok = tmp_path / "ok.gro"
+    gro_ok.write_text(
+        "titolo nan finto\n"
+        "    1CHL1  C3    1   1.000  2.000  3.000\n"
+        "   1.20000   1.20000   1.20000\n"
+    )
+    assert not mb._text_file_has_nan(str(gro_ok))
