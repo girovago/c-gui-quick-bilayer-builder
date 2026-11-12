@@ -477,6 +477,61 @@ def _sterane_offsets() -> dict[str, tuple[float, float]]:
 STEROL_RESIDUES = {"CHL1"}  # rtp_name con geometria steran dedicata
 
 
+def _strip_core_solvent(
+    gro_path: str, z_center: float, half_width: float
+) -> tuple[int, int, int]:
+    """Rimuove dal .gro il solvente dentro la banda centrale lipidica.
+
+    gmx solvate riempie TUTTO il box, incluso il core idrofobico tra le
+    code (bug visuale 12/11: 32% dell'acqua dentro la membrana). Filtro
+    per MOLECOLA: nel .gro una molecola e' un blocco di righe con
+    resnum crescente; SOL (3 atomi) si elimina intera se l'ossigeno OW
+    cade nella banda, NA/CL (1 atomo) se cade l'atomo stesso. Ritorna
+    (rimosse, sol_tot, sol_rimaste) — il .top va ricontato dopo.
+    """
+    with open(gro_path) as f:
+        lines = f.readlines()
+    title, footer = lines[0], lines[-1]
+    atom_lines = lines[2:-1]
+    # raggruppa in molecole per (resnum, resname) contigui
+    molecules: list[list[str]] = []
+    cur_key, cur = None, []
+    for line in atom_lines:
+        key = (line[:5], line[5:10].strip())
+        if key != cur_key and cur:
+            molecules.append(cur)
+            cur = []
+        cur = cur or []
+        cur.append(line)
+        cur_key = key
+    if cur:
+        molecules.append(cur)
+
+    kept: list[str] = []
+    removed = 0
+    sol_tot = 0
+    sol_kept = 0
+    for mol in molecules:
+        resname = mol[0][5:10].strip()
+        if resname in ("SOL", "NA", "CL"):
+            if resname == "SOL":
+                sol_tot += 1
+            # posizione della molecola: OW per SOL, l'atomo per gli ioni
+            z = float(mol[0][36:44])
+            if abs(z - z_center) < half_width:
+                removed += 1
+                continue
+            if resname == "SOL":
+                sol_kept += 1
+        kept.extend(mol)
+
+    new_natoms = len(kept)
+    out = [title, f"{new_natoms:5d}\n", *kept, footer]
+    with open(gro_path, "w") as f:
+        f.writelines(out)
+    return removed, sol_tot, sol_kept
+
+
 def _heavy_clash_count(
     body_lines: list[str], thr: float = 0.30
 ) -> int:
@@ -489,6 +544,11 @@ def _heavy_clash_count(
     vdW reale tra atomi pesanti (C-C ~0.34 nm): e' una soglia "dura" che
     rileva steric clash significativi, NON un controllo softclash completo
     (quello spetta alla minimizzazione energetica, v. generate_mdp).
+
+    Implementazione con SPATIAL HASH (celle thr x thr x thr): O(n) invece
+    di O(n^2) — il vecchio doppio loop su 40k atomi per 30 tentativi
+    anti-clash bloccava i build grandi per minuti a "preparazione della
+    struttura" (12/11/2026, job POPC28+CHL12).
     """
 
     atoms = []
@@ -506,21 +566,42 @@ def _heavy_clash_count(
                 float(line[46:54]) / 10.0,
             )
         )
+    cell = thr
+    grid: dict[tuple[int, int, int], list[int]] = {}
+    for idx, (_rno, _ch, x, y, z) in enumerate(atoms):
+        grid.setdefault(
+            (int(x // cell), int(y // cell), int(z // cell)), []
+        ).append(idx)
+    offsets = [
+        (dx, dy, dz)
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        for dz in (-1, 0, 1)
+    ]
+    thr2 = thr * thr
     count = 0
-    n = len(atoms)
-    for i in range(n):
-        rno_i, ch_i, xi, yi, zi = atoms[i]
-        for j in range(i + 1, n):
-            rno_j, ch_j, xj, yj, zj = atoms[j]
-            if rno_i == rno_j or ch_i != ch_j:
-                continue
-            dx = xi - xj
-            dy = yi - yj
-            dz = zi - zj
-            if abs(dx) >= thr or abs(dy) >= thr or abs(dz) >= thr:
-                continue
-            if dx * dx + dy * dy + dz * dz < thr * thr:
-                count += 1
+    for key, idxs in grid.items():
+        ix, iy, iz = key
+        neighbors: list[int] = []
+        for dx, dy, dz in offsets:
+            nb = grid.get((ix + dx, iy + dy, iz + dz))
+            if nb:
+                neighbors.extend(nb)
+        for i in idxs:
+            rno_i, ch_i, xi, yi, zi = atoms[i]
+            for j in neighbors:
+                if j <= i:
+                    continue
+                rno_j, ch_j, xj, yj, zj = atoms[j]
+                if rno_i == rno_j or ch_i != ch_j:
+                    continue
+                dx = xi - xj
+                dy = yi - yj
+                dz = zi - zj
+                if abs(dx) >= thr or abs(dy) >= thr or abs(dz) >= thr:
+                    continue
+                if dx * dx + dy * dy + dz * dz < thr2:
+                    count += 1
     return count
 
 # Tilt massimo della molecola di sterolo rispetto alla normale della
@@ -541,6 +622,8 @@ def _sterol_atom_lines(
     chain_id: str = "A",
     mirror: bool = False,
     rot_rng: random.Random | None = None,
+    serial_start: int = 1,
+    with_conect: bool = True,
 ) -> list[str]:
     """Righe PDB per uno sterolo (CHL1): backbone steran 4 anelli + catena.
 
@@ -606,6 +689,8 @@ def _sterol_atom_lines(
         coords[name] = (x + dx, y + dy, z0 + flip * dz)
 
     lines: list[str] = []
+    name_serial: dict[str, int] = {}
+    idx = 0
     for name, _atype, _charge, _group in atoms_info:
         ox, oy, oz = coords[name]
         if mirror:
@@ -613,11 +698,19 @@ def _sterol_atom_lines(
         # PDB standard = angstrom: le coordinate interne (nm) vanno x10
         ox, oy, oz = _to_pdb_xyz(ox, oy, oz)
         elem = name[0]
+        serial = serial_start + idx
+        name_serial[name] = serial
+        idx += 1
         lines.append(
-            f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
+            f"ATOM  {serial:5d} {name:>4s} {rtp_name:>4s}"
             f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
             f"1.00  0.00          {elem:>2s}"
         )
+    if with_conect:
+        for a, b in bonds:
+            sa, sb = name_serial.get(a), name_serial.get(b)
+            if sa and sb and sa <= sb:
+                lines.append(f"CONECT{sa:5d}{sb:5d}")
     return lines
 
 
@@ -705,6 +798,8 @@ def _lipid_atom_lines(
     chain_id: str = "A",
     mirror: bool = False,
     rot_rng: random.Random | None = None,
+    serial_start: int = 1,
+    with_conect: bool = True,
 ) -> list[str]:
     """Righe PDB per un lipide con geometria dal grafo dei legami rtp.
 
@@ -743,6 +838,7 @@ def _lipid_atom_lines(
         return _sterol_atom_lines(
             rtp_name, atoms_info, residue.get("bonds", []),
             resno, x, y, z_head, chain_id, mirror, rot_rng,
+            serial_start=serial_start, with_conect=with_conect,
         )
 
     cat, nbrs = _classify_atoms(atoms_info, residue.get("bonds", []))
@@ -1058,6 +1154,13 @@ def _lipid_atom_lines(
             break
 
     # --- Scrittura nell'ordine rtp ---
+    # serial GLOBALI (param serial_start): con serial ripartiti da 1 per ogni
+    # lipide NGL deduce legami anche TRA residui diversi (le code dei due
+    # foglietti si toccano al centro della membrana -> linee fantasma in
+    # vista stick, 12/11/2026). I CONECT espliciti con i bond rtp bloccano
+    # l'inferenza di NGL sui legami inter-residuo.
+    name_serial: dict[str, int] = {}
+    idx = 0
     for name, _atype, _charge, _group in atoms_info:
         ox, oy, oz = coords[name]
         if mirror:
@@ -1065,12 +1168,24 @@ def _lipid_atom_lines(
         # PDB standard = angstrom: coordinate interne (nm) x10
         ox, oy, oz = _to_pdb_xyz(ox, oy, oz)
         elem = name[0]
+        serial = serial_start + idx
+        name_serial[name] = serial
+        idx += 1
         lines.append(
-            f"ATOM  {len(lines)+1:5d} {name:>4s} {rtp_name:>4s}"
+            f"ATOM  {serial:5d} {name:>4s} {rtp_name:>4s}"
             f"{chain_id:1s}{resno:4d}    {ox:8.3f}{oy:8.3f}{oz:8.3f}  "
             f"1.00  0.00          {elem:>2s}"
         )
 
+    if with_conect:
+        for a, b in residue.get("bonds", []):
+            sa, sb = name_serial.get(a), name_serial.get(b)
+            if sa and sb:
+                # una CONECT per atomo con tutti i vicini (dedup): riga
+                # per il legame a-b basta al PDB reader, il doppio senso
+                # e' implicito
+                if sa <= sb:
+                    lines.append(f"CONECT{sa:5d}{sb:5d}")
     return lines
 
 
@@ -1177,6 +1292,7 @@ def generate_pdb(
     box_z: float = 12.0,
     center: bool = True,
     layout: str = "planar",
+    progress: ProgressWriter | None = None,
 ) -> str:
     """Genera una stringa PDB di un bilayer con due fogli.
 
@@ -1259,31 +1375,37 @@ def generate_pdb(
         rng = random.Random(rot_seed)
         body: list[str] = []
         rn = 1
+        serial = 1  # serial PDB GLOBALI (bug 12/11: ripartivano da 1 per lipide)
         # --- Foglio superiore ---
         for idx, resname in enumerate(upper_species):
             x, y = upper_positions[idx]
-            body.extend(
-                _lipid_atom_lines(
-                    resname, rn, x + ox_off, y + oy_off, head_z, "U",
-                    rot_rng=rng,
-                )
+            block = _lipid_atom_lines(
+                resname, rn, x + ox_off, y + oy_off, head_z, "U",
+                rot_rng=rng, serial_start=serial,
             )
+            body.extend(block)
+            serial += sum(1 for l in block if l.startswith("ATOM"))
             rn += 1
         # --- Foglio inferiore (specchio del superiore) ---
         for idx, resname in enumerate(lower_species):
             x, y = lower_positions[idx]
-            body.extend(
-                _lipid_atom_lines(
-                    resname, rn, x + ox_off, y + oy_off, head_z, "L", mirror=True,
-                    rot_rng=rng,
-                )
+            block = _lipid_atom_lines(
+                resname, rn, x + ox_off, y + oy_off, head_z, "L", mirror=True,
+                rot_rng=rng, serial_start=serial,
             )
+            body.extend(block)
+            serial += sum(1 for l in block if l.startswith("ATOM"))
             rn += 1
         return body
 
     body = _render_body(31337)
     best = (None, 10**9)
     for attempt in range(30):
+        if progress is not None:
+            # la fase "prepare" e' QUI: senza questo mark il progress resta
+            # fermo a "Preparazione struttura" per minuti sui build grandi
+            progress.mark(STEP_PREPARE, "active",
+                          f"packing anti-clash tentativo {attempt + 1}/30")
         n_clash = _heavy_clash_count(body)
         if n_clash < best[1]:
             best = (attempt, n_clash)
@@ -2569,6 +2691,20 @@ def _gmx_pipeline(
     print(f"gmx genion: OK ({n_cat} {pname}+, {n_an} CL-, carica lipidi {net:+g} e)")
     _mark(STEP_GENION, "done")
 
+    # --- Solvente nel core idrofobico ---
+    # gmx solvate riempie TUTTO il box: nel build fotografico (POPC28+CHL12,
+    # 12/11) il 32% delle molecole d'acqua (9.876) finiva DENTRO la membrana.
+    # Rimuovo SOL/NA/CL nella banda centrale (spessore P-P - 2x0.2 nm di
+    # margine: l'acqua che idrata le teste polari resta).
+    thickness_db = bilayer_thickness(upper, lower)
+    band_half = max(thickness_db / 2 - 0.2, 0.5)
+    box_zc = box_z / 2.0
+    removed, sol_tot, sol_kept = _strip_core_solvent(
+        ionized_gro, box_zc, band_half
+    )
+    print(f"solvente nel core rimosso: {removed} molecole "
+          f"(SOL {sol_tot} -> {sol_kept}, banda |z| < {band_half:.2f} nm)")
+
     # Verifica che il .top abbia tutte le molecole (lipidi + SOL + NA + CL).
     # solvate -p e genion -p dovrebbero averlo già aggiornato; se manca
     # qualcosa, lo aggiungiamo manualmente basandoci sul .gro ionizzato.
@@ -3141,6 +3277,7 @@ def main(argv: list[str] | None = None) -> int:
         upper, lower,
         box_x=args.box_x, box_y=args.box_y, box_z=args.box_z,
         center=args.center, layout=args.layout,
+        progress=progress,
     )
     pdb_path.write_text(pdb_content, encoding="utf-8")
 
