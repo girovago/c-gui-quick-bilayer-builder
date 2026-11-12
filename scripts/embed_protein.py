@@ -42,6 +42,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -401,18 +402,20 @@ def tm_z_range_nm(pdb_text: str) -> tuple[float, float]:
 
 def get_gmx_binary() -> str:
     """Restituisce il path di gmx (PATH o env cgui-builder)."""
-    for candidate in ("gmx", "gmx_d", "gmx_mpi"):
-        path = subprocess.run(
-            ["which", candidate], capture_output=True, text=True
-        )
-        if path.returncode == 0 and path.stdout.strip():
-            return path.stdout.strip()
+    for candidate in ("gmx", "gmx_mpi", "gmx.exe"):
+        path = shutil.which(candidate)
+        if path:
+            return path
     conda_prefix = os.environ.get("CONDA_PREFIX")
     if conda_prefix:
-        gmx = Path(conda_prefix) / "bin" / "gmx"
-        if gmx.exists():
-            return str(gmx)
-    raise RuntimeError("Eseguibile gmx non trovato nel PATH.")
+        for name in ("gmx", "gmx.exe"):
+            gmx = Path(conda_prefix) / "bin" / name
+            if gmx.exists():
+                return str(gmx)
+    raise RuntimeError(
+        "Eseguibile gmx non trovato nel PATH. Su Windows GROMACS va installato "
+        "a parte o usato via WSL2 (non esiste build nativa GROMACS per Windows)."
+    )
 
 
 def ensure_charmm36_ff() -> Path:

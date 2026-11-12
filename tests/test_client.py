@@ -6,6 +6,7 @@ import datetime as _dt
 import hashlib
 import io
 import json
+import sys
 import tarfile
 from pathlib import Path
 from urllib.parse import parse_qsl
@@ -42,7 +43,8 @@ def test_login_ok_saves_token(home):
     token_file = home / "cache" / "token.json"
     cached = json.loads(token_file.read_text())
     assert cached["token"] == "jwt-123" and cached["email"] == "me@x.org"
-    assert (token_file.stat().st_mode & 0o777) == 0o600
+    if sys.platform != "win32":  # su Windows la maschera POSIX non esiste
+        assert (token_file.stat().st_mode & 0o777) == 0o600
 
 
 def test_login_404_text_body_raises_autherror():

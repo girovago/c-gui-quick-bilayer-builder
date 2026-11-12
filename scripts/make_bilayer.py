@@ -1656,17 +1656,16 @@ constraints       = h-bonds
 
 def find_gmx() -> str | None:
     """Trova l'eseguibile gmx nel PATH o nell'ambiente conda attivo."""
-    for candidate in ("gmx", "gmx_d", "gmx_mpi"):
-        path = subprocess.run(
-            ["which", candidate], capture_output=True, text=True
-        )
-        if path.returncode == 0 and path.stdout.strip():
-            return path.stdout.strip()
+    for candidate in ("gmx", "gmx_mpi", "gmx.exe"):
+        path = shutil.which(candidate)
+        if path:
+            return path
     conda_prefix = os.environ.get("CONDA_PREFIX")
     if conda_prefix:
-        gmx = Path(conda_prefix) / "bin" / "gmx"
-        if gmx.exists():
-            return str(gmx)
+        for name in ("gmx", "gmx.exe"):
+            gmx = Path(conda_prefix) / "bin" / name
+            if gmx.exists():
+                return str(gmx)
     return None
 
 

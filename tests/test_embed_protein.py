@@ -8,8 +8,10 @@ pdb2gmx reale; skip se niente network o niente gmx.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -231,6 +233,15 @@ class TestRunMocked:
 class TestIntegrationReal:
     def test_real_7cfn_embed(self, tmp_path):
         """Scarica 7CFN da RCSB ed esegue pdb2gmx reale."""
+        if shutil.which("gmx") is None:
+            pytest.skip("gmx non nel PATH")
+        # Skip senza rete: probe veloce verso RCSB
+        try:
+            urllib.request.urlopen(
+                "https://files.rcsb.org/download/7CFN.pdb", timeout=10
+            ).read(64)
+        except OSError as exc:
+            pytest.skip(f"rete RCSB non raggiungibile: {exc}")
         ep.get_gmx_binary()  # solleva se assente
         # Scarica PDB reale
         text = ep.fetch_rcsb_pdb("7CFN")
