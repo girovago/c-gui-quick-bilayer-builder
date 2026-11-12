@@ -16,18 +16,20 @@
   let state = $state("idle"); // idle | loading | ready | error
   let message = $state("");
   let showWater = $state(false);
+  let showIons = $state(false);
+  let hasWater = $state(false); // il sistema corrente ha acqua
+  let hasIons = $state(false); // il sistema corrente ha ioni
   let isSample = $state(false); // TRUE = demo locale in scena (badge giallo)
   let isLocal = $state(false); // TRUE = build GROMACS generato in locale (badge azzurro)
   let style = $state("spacefill"); // stile della rappresentazione principale
-  let panelOpen = $state(true); // pannello controlli (⚙ collassa su schermi stretti)
   let hint = $state(false); // pillola hint mouse (5s dal mount)
   let note = $state(""); // messaggio onesto su stile non applicabile (es. cartoon su lipidi puri)
-  let hasSolvent = $state(true); // il sistema corrente ha acqua/ioni (il toggle si disabilita se no)
   let lastLoaded = null;
   let lastRequested = null; // il check corre dopo l'await: evita la race del cambio job
   let waterRepr = null;
+  let ionRepr = null;
   let compRef = null; // componente corrente in scena (sample o job reale)
-  let mainRepr = null; // UNA sola rappresentazione principale (il solvente è a parte)
+  let mainRepr = null; // UNA sola rappresentazione principale (solvente e ioni sono a parte)
 
   // TRAPPOLA verificata dal vivo (26/10, NGL vendORIZZATO): nelle selezioni le
   // keyword (`resname`, `element`…) tornano il set COMPLETO e — peggio — un
@@ -36,20 +38,35 @@
   // Quindi niente selezioni statiche: i nomi solvente vengono presi SOLO
   // dall'intersezione tra un elenco canonico e i resname davvero presenti
   // (letti da structure.eachResidue), e se non ce ne sono il toggle si disabilita.
-  const SOLVENT_CANON = new Set([
+  const WATER_CANON = new Set([
     "TIP3", "TIP3C", "TIP", "TIPJ", "HOH", "WAT", "SOL", // acqua (CHARMM/PDB)
+  ]);
+  const ION_CANON = new Set([
     "SOD", "POT", "CLA", "CAL", "ZN", "ZN2", "MG", "LI", "NA", "K", "CL", // ioni CHARMM
   ]);
   const SAMPLE = "/api/sample/pdb";
 
-  function solventResNames(st) {
+  // resname presenti nella struttura filtrati su un elenco canonico (trappola
+  // 26/10: nomi assenti avvelenano la selezione NGL → solo nomi REALI)
+  function namesOf(st, canon) {
     try {
       const present = new Set();
       st.eachResidue(function (rp) { if (rp.resname) present.add(rp.resname); });
-      return [...SOLVENT_CANON].filter((n) => present.has(n)).sort();
+      return [...canon].filter((n) => present.has(n)).sort();
     } catch {
       return [];
     }
+  }
+
+  function solventResNames(st) {
+    return namesOf(st, new Set([...WATER_CANON, ...ION_CANON]));
+  }
+
+  // NGL: i token separati da spazio sono AND, non OR ("SOL NA CL" = insieme
+  // vuoto → repr invisibile). La forma corretta è "SOL or NA or CL" (bare
+  // token = resname).
+  function orSele(names) {
+    return names.join(" or ");
   }
 
   onMount(() => {
@@ -97,8 +114,6 @@
     document.addEventListener("visibilitychange", onVis);
     stageReady = true; // abilita l'$effect di caricamento (stage è variabile piena, non reattiva)
     window.__ngl_stage = stage; // probe debug da tools.browser
-    // su schermo stretto i controlli partono chiusi (il ⚙ li riapre)
-    if (typeof window.innerWidth === "number" && window.innerWidth < 640) panelOpen = false;
     hint = true;
     const hintTimer = setTimeout(() => (hint = false), 5000);
     return () => {
@@ -114,14 +129,22 @@
   });
 
   function mainParams(name, comp) {
-    // esclusione solvente dinamica (vedi nota SOLVENT_CANON in alto): solo
-    // resname presenti; se il sistema non ha solvente → sele vuota = tutto
+    // esclusione solvente dinamica: solo resname presenti, con OR esplicito
+    // (spazio = AND in NGL: "not (SOL NA CL)" = not(vuoto) = TUTTO — bug toggle)
     const names = comp ? solventResNames(comp.structure) : [];
-    const clean = names.length ? `not (${names.join(" ")})` : "";
+    const clean = names.length ? `not (${orSele(names)})` : "";
     // cartoon: solo 'protein' (keyword che funziona e già esclude il solvente)
     if (name === "ball+stick") return clean ? { sele: clean } : {}; // NGL usa il «+», non il tratteggio
     if (name === "licorice") return clean ? { sele: clean, radius: 0.25 } : { radius: 0.25 };
+    if (name === "line") return clean ? { sele: clean } : {};
     if (name === "cartoon") return { sele: "protein" };
+    if (name === "surface") {
+      // superficie molecolare del solo soluto (senza solvente): MSMS pesa
+      // sull'acqua, quindi l'esclusione qui è anche una questione di performance
+      const p = { opacity: 0.85, smooth: 3 };
+      if (clean) p.sele = clean;
+      return p;
+    }
     const p = { radius: "schematic" }; // spacefill (default)
     if (clean) p.sele = clean;
     return p;
@@ -176,10 +199,13 @@
 
   function decorate(comp) {
     compRef = comp;
-    // solvente/ioni veri della STRUTTURA corrente: se non ce ne sono il
-    // toggle acqua/ioni si disabilita (niente riferimenti fantasma)
-    const names = solventResNames(comp.structure);
-    hasSolvent = names.length > 0;
+    // acqua e ioni SEPARATI (come RCSB): toggle indipendenti, default = visibili
+    const water = namesOf(comp.structure, WATER_CANON);
+    const ions = namesOf(comp.structure, ION_CANON);
+    hasWater = water.length > 0;
+    hasIons = ions.length > 0;
+    showWater = hasWater;
+    showIons = hasIons;
     let effStyle = style;
     if (style === "cartoon" && !hasProtein()) {
       // nuovo sistema senza backbone (es. si torna al sample): il cartoon
@@ -189,17 +215,26 @@
       note = "cartoon non applicabile a questo sistema (nessuna proteina): spacefill attivo.";
     }
     mainRepr = comp.addRepresentation(effStyle, mainParams(effStyle, comp));
-    if (hasSolvent) {
+    if (hasWater) {
       waterRepr = comp.addRepresentation("spacefill", {
-        sele: names.join(" "),
+        sele: orSele(water),
         radius: 0.3,
-        opacity: 0.6,
+        opacity: 0.55,
       });
     } else {
       waterRepr = null;
-      showWater = false;
+    }
+    if (hasIons) {
+      ionRepr = comp.addRepresentation("spacefill", {
+        sele: orSele(ions),
+        radius: 0.45,
+        opacity: 0.95,
+      });
+    } else {
+      ionRepr = null;
     }
     if (waterRepr) waterRepr.setVisibility(showWater);
+    if (ionRepr) ionRepr.setVisibility(showIons);
     comp.autoView();
   }
 
@@ -209,8 +244,11 @@
     stage.__resume?.(); // serve il loop per l'animazione di ingresso
     stage.removeAllComponents();
     waterRepr = null;
+    ionRepr = null;
     mainRepr = null;
     compRef = null;
+    showWater = false;
+    showIons = false;
     state = "loading";
     // badge: sample (giallo) vs build locale (azzurro) — esclusivi
     isSample = false;
@@ -241,10 +279,38 @@
   }
 
   function toggleWater() {
-    if (!hasSolvent || !waterRepr) return;
+    if (!waterRepr) return;
     showWater = !showWater;
     waterRepr.setVisibility(showWater);
     stage?.__resume?.();
+  }
+
+  function toggleIons() {
+    if (!ionRepr) return;
+    showIons = !showIons;
+    ionRepr.setVisibility(showIons);
+    stage?.__resume?.();
+  }
+
+  async function snapshot() {
+    if (!stage) return;
+    stage?.__resume?.();
+    try {
+      const blob = await stage.makeImage({
+        factor: 2, // risoluzione 2x: PNG nitido per presentazioni
+        antialias: true,
+        trim: true,
+        transparent: false,
+      });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `cgui_${isSample ? "sample" : (jobid || "vista")}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      note = "";
+    } catch (e) {
+      note = `snapshot non riuscito: ${String(e?.message ?? e)}`;
+    }
   }
 
   $effect(() => {
@@ -266,7 +332,7 @@
   });
 </script>
 
-<div class="relative min-h-[70vh] overflow-hidden rounded-lg border border-zinc-800 bg-[#0b0f1a]">
+<div class="relative min-h-[80vh] overflow-hidden rounded-lg border border-zinc-800 bg-[#0b0f1a]">
   <div bind:this={holder} class="absolute inset-0"></div>
 
   {#if state !== "ready"}
@@ -300,74 +366,85 @@
     </div>
   {/if}
 
-  <!-- pannello controlli (in basso a sinistra); collassabile col ⚙ -->
+  <!-- toolbar strumenti (stile RCSB/AlphaFold): compatta, in alto a destra -->
   <div
-    class="absolute left-3 bottom-3 z-10 flex items-end gap-2 transition-opacity"
+    class="absolute top-2 right-2 z-10 flex flex-wrap items-center justify-end gap-1.5 rounded bg-white/85 p-1.5 text-xs text-zinc-700 backdrop-blur transition-opacity"
     class:opacity-0={state !== "ready"}
     class:pointer-events-none={state !== "ready"}
+    role="toolbar"
+    aria-label="Strumenti vista 3D"
   >
-    {#if panelOpen}
-      <div
-        class="flex flex-col gap-1.5 rounded bg-white/85 p-2 text-xs text-zinc-700 backdrop-blur"
-        role="group"
-        aria-label="Controlli vista 3D"
+    <label class="flex items-center gap-1">
+      <span class="text-zinc-500">stile</span>
+      <select
+        bind:value={style}
+        onchange={() => setStyle(style)}
+        aria-label="Stile di rappresentazione"
+        title="sfere = spacefill · ball+stick = sfere e bastoncini · licorice = solo bastoncini · linee = skeleton · superficie = molecular surface · cartoon = backbone (serve una proteina)"
+        class="max-w-[8rem] rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800 focus:border-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
       >
-        <label class="flex items-center gap-1.5" title="spacefill = sfere piene · ball+stick = sfere e bastoncini · licorice = solo bastoncini · cartoon = backbone (serve una proteina)">
-          <span class="text-zinc-500">stile</span>
-          <select
-            bind:value={style}
-            onchange={() => setStyle(style)}
-            aria-label="Stile di rappresentazione"
-            title="spacefill = sfere piene · ball+stick = sfere e bastoncini · licorice = solo bastoncini · cartoon = backbone (serve una proteina)"
-            class="w-[7.5rem] rounded border border-zinc-300 bg-white px-1 py-0.5 text-xs text-zinc-800 focus:border-cyan-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
-          >
-            <option value="spacefill">spacefill</option>
-            <option value="ball+stick">ball+stick</option>
-            <option value="licorice">licorice</option>
-            <option value="cartoon">cartoon</option>
-          </select>
-        </label>
-        {#if note}
-          <p class="max-w-[13rem] text-[11px] leading-snug text-amber-700" role="status">{note}</p>
-        {/if}
-        <button
-          type="button"
-          class="rounded border border-zinc-300 px-1.5 py-0.5 text-left hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
-          onclick={resetView}
-          title="Riporta la scena al centro e allo zoom originale"
-        >
-          reimposta vista
-        </button>
-      </div>
+        <option value="spacefill">sfere</option>
+        <option value="ball+stick">ball+stick</option>
+        <option value="licorice">licorice</option>
+        <option value="line">linee</option>
+        <option value="surface">superficie</option>
+        <option value="cartoon">cartoon</option>
+      </select>
+    </label>
+    {#if hasWater}
+      <label
+        class="flex cursor-pointer items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 hover:bg-zinc-100 focus-within:outline focus-within:outline-2 focus-within:outline-cyan-400"
+        title="mostra/nascondi l'acqua del solvente"
+      >
+        <input
+          type="checkbox"
+          class="accent-cyan-500"
+          name="show-water"
+          aria-label="Mostra acqua"
+          checked={showWater}
+          onchange={toggleWater}
+        />
+        acqua
+      </label>
+    {/if}
+    {#if hasIons}
+      <label
+        class="flex cursor-pointer items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 hover:bg-zinc-100 focus-within:outline focus-within:outline-2 focus-within:outline-cyan-400"
+        title="mostra/nascondi gli ioni (NaCl/KCl)"
+      >
+        <input
+          type="checkbox"
+          class="accent-violet-500"
+          name="show-ions"
+          aria-label="Mostra ioni"
+          checked={showIons}
+          onchange={toggleIons}
+        />
+        ioni
+      </label>
     {/if}
     <button
       type="button"
-      class="rounded bg-white/85 px-2 py-1 text-xs text-zinc-700 backdrop-blur hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
-      onclick={() => (panelOpen = !panelOpen)}
-      aria-pressed={panelOpen}
-      aria-label="Mostra/nascondi controlli vista 3D"
-      title="Mostra/nascondi i controlli della vista 3D"
+      class="rounded border border-zinc-300 px-1.5 py-0.5 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+      onclick={resetView}
+      title="Riporta la scena al centro e allo zoom originale"
     >
-      ⚙
+      vista
+    </button>
+    <button
+      type="button"
+      class="rounded border border-zinc-300 px-1.5 py-0.5 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+      onclick={snapshot}
+      title="Scarica un PNG della vista corrente"
+    >
+      📷
     </button>
   </div>
 
-  <label
-    class="absolute right-3 bottom-3 flex cursor-pointer items-center gap-2 rounded bg-white/85 px-2 py-1 text-xs text-zinc-700 backdrop-blur transition-opacity focus-within:ring-2 focus-within:ring-cyan-500"
-    class:opacity-0={state !== "ready"}
-    class:pointer-events-none={state !== "ready"}
-  >
-    <input
-      type="checkbox"
-      class="accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-      name="show-water"
-      aria-label="Mostra acqua e ioni"
-      aria-disabled={!hasSolvent}
-      title={hasSolvent ? "mostra/nascondi acqua e ioni" : "questo sistema non contiene solvente"}
-      disabled={!hasSolvent}
-      checked={showWater}
-      onchange={toggleWater}
-    />
-    acqua/ioni
-  </label>
+  {#if note}
+    <p
+      class="absolute bottom-3 left-3 z-10 max-w-[18rem] rounded bg-amber-100/90 px-2 py-1 text-[11px] leading-snug text-amber-800 backdrop-blur"
+      role="status"
+    >{note}</p>
+  {/if}
 </div>

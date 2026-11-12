@@ -138,6 +138,7 @@ class MakeBilayerInput(BaseModel):
     layout: str | None = None
     solvent: str | None = None
     ions: str | None = None  # "KCl" | "NaCl" | "none"
+    ion_conc: float = 0.15   # molarità del sale (usata solo con ions KCl/NaCl)
     build_type: str | None = None  # "lipid" | "protein" | "dna" | "rna" | "small-mol"
     protein_pdb_id: str | None = None
     protein_pdb_file_name: str | None = None

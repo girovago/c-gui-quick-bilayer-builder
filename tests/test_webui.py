@@ -390,3 +390,54 @@ def test_bilayer_pdb_header():
         if line.startswith("ATOM") and "POP" in line[17:20]
     ]
     assert any(z > 19 for z in zs) and any(z < -19 for z in zs)
+
+
+def test_build_cmd_ions_solvate_and_conc(tmp_path, monkeypatch):
+    """Il cmd del build locale porta --solvate col solvente e --ion-type/
+    --ion-conc presi dal payload (non più hardcodati a 0.15)."""
+    from cgui_studio.store import JobStore
+
+    captured = {}
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _R()
+
+    monkeypatch.setattr(webui.subprocess, "run", fake_run)
+    store = JobStore(db_path=tmp_path / "jobs.db")
+    payload = webui.MakeBilayerInput(
+        spec="POPC=4", run_gmx=True, solvent="water", ions="NaCl", ion_conc=0.25
+    )
+    webui._run_build_async(payload, "local-test", tmp_path, store)
+    cmd = captured["cmd"]
+    assert "--solvate" in cmd
+    assert "--ion-type" in cmd and cmd[cmd.index("--ion-type") + 1] == "NaCl"
+    assert "--ion-conc" in cmd and cmd[cmd.index("--ion-conc") + 1] == "0.25"
+
+
+def test_build_cmd_no_ions_when_none(tmp_path, monkeypatch):
+    from cgui_studio.store import JobStore
+
+    captured = {}
+
+    class _R:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _R()
+
+    monkeypatch.setattr(webui.subprocess, "run", fake_run)
+    store = JobStore(db_path=tmp_path / "jobs.db")
+    payload = webui.MakeBilayerInput(spec="POPC=4", run_gmx=True, solvent="none", ions="none")
+    webui._run_build_async(payload, "local-test", tmp_path, store)
+    cmd = captured["cmd"]
+    assert "--solvate" not in cmd
+    assert "--ion-type" not in cmd

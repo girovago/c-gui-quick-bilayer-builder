@@ -46,7 +46,7 @@
   }
 
   const W = 640;
-  const H = 120;
+  const H = 64;
   const MARGIN = 16;
   const INNER = W - 2 * MARGIN;
 
@@ -84,9 +84,9 @@
 <div class="mb-2 rounded-lg border border-zinc-200 bg-white p-2" aria-label="Schema della spec">
   <div class="mb-1 flex items-baseline justify-between gap-2 px-1">
     <span
-      class="rounded border border-violet-500/50 bg-violet-950/60 px-2 py-0.5 text-[11px] font-semibold text-violet-700"
+      class="rounded border border-violet-500/50 bg-violet-950/60 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700"
     >
-      SCHEMA DELLA SPEC — provvisorio
+      SCHEMA SPEC (provvisorio)
     </span>
     <button
       type="button"
@@ -113,7 +113,7 @@
     >
       <svg
         viewBox="0 0 {W} {H}"
-        class="block h-[120px] w-full"
+        class="block h-[64px] w-full"
         role="img"
         aria-hidden={true}
       >
@@ -121,10 +121,10 @@
         <line x1={MARGIN} y1={H / 2} x2={W - MARGIN} y2={H / 2} stroke="#a1a1aa" stroke-dasharray="4 6" stroke-width="1" />
 
         {#if presetMode}
-          <text x={W / 2} y={H / 2 - 10} text-anchor="middle" class="fill-zinc-700" font-size="15" font-weight="600">
+          <text x={W / 2} y={H / 2 - 5} text-anchor="middle" class="fill-zinc-700" font-size="11" font-weight="600">
             preset server `{membtype}`
           </text>
-          <text x={W / 2} y={H / 2 + 12} text-anchor="middle" class="fill-zinc-500" font-size="11">
+          <text x={W / 2} y={H / 2 + 10} text-anchor="middle" class="fill-zinc-500" font-size="9">
             composizione decisa dal preset: niente molecole disegnate
           </text>
         {:else}
@@ -132,16 +132,16 @@
           {#each upperLayout as type (type.name + type.bandStart)}
             {#each Array(type.heads) as _, hi (hi)}
               {@const x = type.bandStart + (type.bandWidth * (hi + 0.5)) / type.heads}
-              <path d={tails(x, 18, 52)} stroke={type.color} stroke-width="1" fill="none" opacity="0.75" />
-              <circle cx={x} cy={18} r={3.2} fill={type.color} />
+              <path d={tails(x, 10, 29)} stroke={type.color} stroke-width="1" fill="none" opacity="0.75" />
+              <circle cx={x} cy={10} r={2.4} fill={type.color} />
             {/each}
           {/each}
           <!-- foglia lower: teste in basso, code verso il centro -->
           {#each lowerLayout as type (type.name + type.bandStart)}
             {#each Array(type.heads) as _, hi (hi)}
               {@const x = type.bandStart + (type.bandWidth * (hi + 0.5)) / type.heads}
-              <path d={tails(x, 102, 68)} stroke={type.color} stroke-width="1" fill="none" opacity="0.75" />
-              <circle cx={x} cy={102} r={3.2} fill={type.color} />
+              <path d={tails(x, 54, 35)} stroke={type.color} stroke-width="1" fill="none" opacity="0.75" />
+              <circle cx={x} cy={54} r={2.4} fill={type.color} />
             {/each}
           {/each}
         {/if}

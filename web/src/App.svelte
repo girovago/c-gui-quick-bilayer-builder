@@ -606,7 +606,7 @@
         {#if compareJobId}
           confronto: job {record?.outdir ? selectedId : "—"} + job {compareJobId}
         {:else}
-          {record ? `job ${selectedId}${record.outdir ? " · system/step1_pdbreader.pdb" : " · non ancora estratto"}` : "nessun job selezionato"}
+          {record ? `job ${selectedId}${record.outdir ? " · estratto in system/" : " · non ancora estratto"}` : "nessun job selezionato"}
         {/if}
       </p>
     </section>
