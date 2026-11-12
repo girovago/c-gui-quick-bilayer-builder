@@ -24,6 +24,22 @@
     clone_job: "",
   });
   let form = $state(blankForm());
+
+  // SpecSketch è live: il wizard (Launcher) rispecchia la composizione qui.
+  // membtype preset server → lo sketch mostra la nota "preset" (upper/lower vuoti)
+  // GUARD non reattivo: senza questo, l'$effect del Launcher (che legge form
+  // tramite syncSketch e può riscrivere lo stesso valore) va in loop infinito
+  // e congela la UI. Le letture di form avvengono SOLO quando il valore è nuovo.
+  let lastSketch = null;
+  function syncSketch({ upper, lower }) {
+    if (lastSketch && lastSketch.upper === upper && lastSketch.lower === lower) return;
+    lastSketch = { upper, lower };
+    if (form.membtype) return; // sketch preset già coerente
+    const u = upper ?? "";
+    const l = lower ?? "";
+    if (u !== form.upper) form.upper = u;
+    if (l !== form.lower) form.lower = l;
+  }
   let valid = $derived(isFormValid(form));
 
   const MEMB_PRESETS = ["PMm", "aPM", "ENDm", "ENDf", "ENDp", "BTm", "BTf", "BTp", "GMm", "YMm", "ERm"];
@@ -118,7 +134,7 @@
     const locals = compareableJobs.filter((j) => String(j.jobid ?? "").startsWith("local-"));
     const last = locals.at(-1) ?? compareableJobs.at(-1);
     if (!last) {
-      flash("error", "nessun job finito da confrontare: genera un build locale o estrai un job");
+      flash("err", "nessun job finito da confrontare: genera un build locale o estrai un job");
       return;
     }
     compareJobId = last.jobid;
@@ -280,6 +296,14 @@
         buildJobId = null;
         if (p.error) flash("err", `Build fallito: ${p.error}`);
         else flash("ok", `Build completato in ${p.elapsed_s}s`);
+        // metriche reali del build (metrics.json in system/, servito da API):
+        // il pannello "Metriche build" del wizard mostra i numeri veri
+        try {
+          buildMetrics = await api(`/api/files/${p.jobid}/system/metrics.json`);
+          if (!buildMetrics?.natoms) buildMetrics = null; // risposta non valida
+        } catch {
+          buildMetrics = null; // build senza metriche (es. --run-gmx fallito)
+        }
         selectedId = p.jobid;
         await refreshDetail();
         await refreshJobs();
@@ -302,7 +326,8 @@
           lower: params?.lower || params?.upper || spec,
           run_ffconverter: true,
           membrane_only: true,
-          ion_type: "KCl",
+          // ioni scelti nel wizard (onestà: niente KCl fisso), null = niente ioni
+          ion_type: params?.ions && params.ions !== "none" ? params.ions : null,
           ion_conc: 0.15,
         }),
       });
@@ -546,7 +571,7 @@
       </div>
 
       <div class={panel !== "single" && "hidden"} role="tabpanel" aria-label="Wizard singolo">
-        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} buildLog={buildLog} buildMetrics={buildMetrics} onLogClear={() => (buildLog = "")} localBusy={localBusy} buildProgress={buildProgress} />
+        <Launcher onCreate={handleCreateLocal} onSubmit={handleSubmit} buildLog={buildLog} buildMetrics={buildMetrics} onLogClear={() => (buildLog = "")} localBusy={localBusy} buildProgress={buildProgress} onPick={pickAndRefresh} onToast={flash} onSpecChange={syncSketch} />
       </div>
 
       <!-- BatchPanel resta MONTATO anche nei tab in cui non è visibile (class:hidden,
@@ -675,7 +700,7 @@
             </button>
           </div>
           {#if status.rank && /ahead|pending/i.test(status.rank)}
-            <p class="mt-2 text-[11px] leading-snug text-amber-600">
+            <p class="mt-2 text-[11px] leading-snug text-amber-700">
               in coda sul server: la coda CHARMM-GUI oggi è sovraccarica, l'attesa può durare a lungo
             </p>
           {/if}

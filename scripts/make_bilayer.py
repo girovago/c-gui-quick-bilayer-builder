@@ -3056,6 +3056,15 @@ File:
             json.dumps(metrics, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+        # copia anche in system/: e' la directory servita via API (/api/files)
+        # e cosi' la GUI puo' leggere le metriche del build appena finito
+        try:
+            (system_dir / "metrics.json").write_text(
+                json.dumps(metrics, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         if LIPID_RTP_LOAD_OK:
             print(f"  Metriche: spessore P-P {metrics['thickness_P_nm']} nm, "
                   f"APL {metrics['apl_measured_nm2']} nm2, "

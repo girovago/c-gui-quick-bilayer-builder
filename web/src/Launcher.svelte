@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { LIPID_CATALOG, LIPID_CATEGORIES } from "./lipidCatalog.js";
 
-  const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy, buildProgress = null } = $props();
+  const { onCreate, onSubmit, buildLog, buildMetrics, onLogClear, localBusy: propLocalBusy, buildProgress = null, onPick = null, onToast = null, onSpecChange = null } = $props();
 
   const COMMON = new Set(["POPC","CHOL","CHL1","POPE","DPPC","DSPC","DOPS","DOTAP","SM","PSM","DOPC","DOPE","DMPC","DLPC","DPPS","POPS","POPA","POPG","POPI"]);
 
@@ -115,7 +115,11 @@
         return;
       }
       const d = await res.json();
-      flash?.("ok", `Recettore inserito: job ${d.jobid}`);
+      // feedback reale + selezione del job (flash?.() era dead code: flash
+      // non esiste nel Launcher). onPick/onToast arrivano da App, come per BatchPanel
+      embedErr = "";
+      onToast?.("ok", `Recettore inserito: job ${d.jobid}`);
+      onPick?.(d.jobid ?? d.job?.jobid);
     } catch (e) {
       embedErr = e.message;
     } finally {
@@ -123,6 +127,16 @@
     }
   }
   function totalCounts(c) { return Object.values(c).reduce((s, v) => s + v, 0); }
+
+  // SpecSketch (colonna centrale) legge form di App: senza questo sync lo
+  // schema mostrava sempre il blank default (POPC=64) anche se il wizard
+  // componeva altro — falso proprio mentre dichiara "live dalla spec"
+  $effect(() => {
+    if (!onSpecChange) return;
+    const u = specString(upperCounts) || null;
+    const l = symmetric ? u : (specString(lowerCounts) || null);
+    onSpecChange({ upper: u, lower: l });
+  });
   const ALIAS_LIPID = { CHOL: "CHL1" };
   function specString(c) {
     return Object.entries(c)
@@ -310,20 +324,20 @@
         {/if}
 
         <div class="mt-5 flex flex-col sm:flex-row gap-3 border-t border-zinc-100 pt-5">
-          <button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button>
+          <button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button>
         </div>
       {:else if buildType === "protein"}
         <div class="space-y-5"><div><label class="block text-sm font-semibold text-zinc-900 mb-2">PDB ID</label><input type="text" bind:value={proteinPdbId} maxlength="4" placeholder="Es. 1ABC" class="w-full rounded-lg border border-zinc-300 px-4 py-2.5 text-sm uppercase tracking-widest text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200" /></div><div class="border border-dashed border-zinc-300 rounded-xl p-6 text-center hover:bg-zinc-50 transition-colors"><label class="flex items-center gap-3 cursor-pointer group"><input type="file" accept=".pdb,.pdbqt" class="hidden" onchange={(e) => { if (e.target.files?.[0]) proteinPdbFile = e.target.files[0]; }} /><span class="text-2xl group-hover:text-cyan-500 transition-colors">📁</span><span class="text-sm text-zinc-700">{proteinPdbFile ? proteinPdbFile.name : "oppure carica un file PDB"}</span></label></div></div>
-        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
       {:else if buildType === "dna"}
         <div class="space-y-5"><div><label class="block text-sm font-semibold text-zinc-900 mb-2">Sequenza DNA</label><textarea bind:value={dnaSequence} rows="4" placeholder="ATGCCGTAAGGCTT…" class="w-full rounded-lg border border-zinc-300 px-4 py-2.5 font-mono text-sm uppercase text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"></textarea></div></div>
-        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
       {:else if buildType === "rna"}
         <div class="space-y-5"><div><label class="block text-sm font-semibold text-zinc-900 mb-2">Sequenza RNA</label><textarea bind:value={rnaSequence} rows="4" placeholder="AUGCCGUAAGGCUU…" class="w-full rounded-lg border border-zinc-300 px-4 py-2.5 font-mono text-sm uppercase text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"></textarea></div></div>
-        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
       {:else}
         <div class="space-y-5"><div class="border-2 border-dashed border-zinc-300 rounded-2xl p-8 text-center hover:border-cyan-400 hover:bg-cyan-50/30 transition-colors"><span class="text-4xl mb-3 block">💊</span><span class="text-xs text-zinc-600 mb-2 block">Trascina o scegli un file</span><input type="file" accept=".pdb,.sdf,.mol" class="hidden" onchange={(e) => { if (e.target.files?.[0]) smallMolFile = e.target.files[0]; }} /><label class="cursor-pointer group"><span class="text-sm text-zinc-700 group-hover:text-cyan-600">{smallMolFile ? smallMolFile.name : "PDB / SDF / MOL"}</span></label></div></div>
-        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
+        <div class="pt-6 border-t border-zinc-100 flex gap-3"><button type="button" class="flex-1 rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed" onclick={next} disabled={!stepValid()}>Avanti →</button></div>
       {/if}
     </div>
   {/if}
@@ -348,7 +362,7 @@
         </div>
       </div>
       <div class="mt-6 rounded-lg bg-zinc-50 border border-zinc-200 p-4"><p class="text-xs text-zinc-500 leading-relaxed"><span class="font-semibold text-zinc-700">ℹ️ Mescolamento laterale:</span> specie distribuite casualmente nei foglietti (seed riproducibile), come in una membrana reale.</p></div>
-      <div class="mt-6 flex justify-between"><button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="rounded-xl bg-cyan-600 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200" onclick={next}>Avanti →</button></div>
+      <div class="mt-6 flex justify-between"><button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button><button type="button" class="rounded-xl bg-cyan-700 px-6 py-3 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200" onclick={next}>Avanti →</button></div>
     </div>
   {/if}
   <!-- STEP 4 -->
@@ -389,7 +403,7 @@
       {#if buildLog}
         <div class="mt-5 rounded-lg bg-zinc-900 p-4 max-h-64 overflow-y-auto"><div class="flex items-center gap-2 mb-3"><span class="text-cyan-400 font-bold text-[10px]">LOG GROMACS</span><button type="button" onclick={onLogClear} class="text-zinc-500 hover:text-white">✕</button></div><pre class="text-[10px] text-zinc-300 overflow-x-auto">{buildLog}</pre></div>
       {/if}
-      <div class="mt-6 flex flex-col sm:flex-row gap-4"><button type="button" class="flex-1 rounded-xl bg-emerald-600 px-6 py-3.5 text-base font-semibold text-white hover:bg-emerald-700 shadow-lg shadow-emerald-200 disabled:bg-zinc-300 disabled:cursor-not-allowed" onclick={create} disabled={propLocalBusy || !stepValid()}>{#if propLocalBusy}<span class="inline-block w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></span>{buildType === "lipid" ? "Costruzione in corso…" : "Invio in corso…"}{:else}{buildType === "lipid" ? "▶ Crea struttura (locale, GROMACS)" : "▶ Invia a CHARMM-GUI"}{/if}</button><button type="button" class="flex-1 rounded-xl bg-cyan-600 px-6 py-3.5 text-base font-semibold text-white hover:bg-cyan-700 shadow-lg shadow-cyan-200" onclick={submit}>Invia a CHARMM-GUI</button></div>
+      <div class="mt-6 flex flex-col sm:flex-row gap-4"><button type="button" class="flex-1 rounded-xl bg-emerald-700 px-6 py-3.5 text-base font-semibold text-white hover:bg-emerald-800 shadow-lg shadow-emerald-200 disabled:bg-zinc-300 disabled:cursor-not-allowed" onclick={create} disabled={propLocalBusy || !stepValid()}>{#if propLocalBusy}<span class="inline-block w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></span>{buildType === "lipid" ? "Costruzione in corso…" : "Invio in corso…"}{:else}{buildType === "lipid" ? "▶ Crea struttura (locale, GROMACS)" : "▶ Invia a CHARMM-GUI"}{/if}</button><button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3.5 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200" onclick={submit}>Invia a CHARMM-GUI</button></div>
       <div class="mt-4 flex justify-between"><button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button></div>
     </div>
   {/if}

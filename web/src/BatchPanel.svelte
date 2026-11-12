@@ -312,7 +312,7 @@
             {#if row.jobid}
               <button
                 type="button"
-                class="ml-auto font-mono text-[10px] text-zinc-600 underline decoration-dotted hover:text-cyan-300 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                class="ml-auto font-mono text-[10px] text-zinc-600 underline decoration-dotted hover:text-cyan-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
                 onclick={() => onPick(row.jobid)}
                 title="apri il job nella lista a destra"
               >
@@ -322,7 +322,7 @@
           </div>
 
           {#if !rowValid(row)}
-            <p class="mt-1 text-[10px] text-amber-600">
+            <p class="mt-1 text-[10px] text-amber-700">
               riga non valida: serve LIPID=count (es. POPC=64) su upper e lower, margin &gt; 0 — più
               lipidi separati da «;»
             </p>
