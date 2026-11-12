@@ -34,7 +34,7 @@ jobs:
       - name: Lint (ruff)
         run: uv run ruff check . || true
 
-      - name: Python tests (mock mode: no gmx/lipid.rtp on CI → skip readable)
+      - name: "Python tests (mock mode, skip leggibile senza gmx/lipid.rtp)"
         env:
           CGUI_MOCK: "1"
         run: uv run pytest -p no:warnings -q || true
