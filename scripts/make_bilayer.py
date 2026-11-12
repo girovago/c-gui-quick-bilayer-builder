@@ -410,24 +410,64 @@ def _sterane_offsets() -> dict[str, tuple[float, float]]:
     nz = lat_cz - cC[1]
     nl = math.sqrt(nx * nx + nz * nz)
     cD = (lat_cx + nx / nl * apP, lat_cz + nz / nl * apP)
-    # C13/C14 sono vertici condivisi: angoli dal centro D
+    # C14 è vertice condiviso: angolo dal centro D
     a14 = math.atan2(pos["C14"][1] - cD[1], pos["C14"][0] - cD[0])
-    a13 = math.atan2(pos["C13"][1] - cD[1], pos["C13"][0] - cD[0])
-    # pentagono gira dal lato condiviso verso l'esterno (direzione normale)
-    step = -math.radians(72) if (a13 - a14) % (2 * math.pi) > math.pi else math.radians(72)
+    # pentagono fused: due orientazioni possibili attorno al lato condiviso
+    # C13-C14; scelgo quella che porta C15 PIU' LONTANO dai vertici dell'anello
+    # C (bug 12/11: la regola sul segno dell'angolo a volte sceglie il verso
+    # interno e C15 cadeva a 0.02 nm da C13 -> pdb2gmx H-build NaN -> solvate KO)
+    best_d, best_step = -1.0, math.radians(72)
+    for cand in (math.radians(72), -math.radians(72)):
+        c15 = hexv(cD[0], cD[1], math.degrees(a14 + cand))
+        dmin = min(math.dist(c15, pos[v]) for v in ("C11", "C12", "C13", "C14"))
+        if dmin > best_d:
+            best_d, best_step = dmin, cand
+    step = best_step
     pos["C15"] = hexv(cD[0], cD[1], math.degrees(a14 + step))
     pos["C16"] = hexv(cD[0], cD[1], math.degrees(a14 + 2 * step))
     pos["C17"] = hexv(cD[0], cD[1], math.degrees(a14 + 3 * step))
     # --- Metili anello ---
-    pos["C18"] = (pos["C13"][0] - 0.09, pos["C13"][1] - 0.12)
-    pos["C19"] = (pos["C10"][0] + 0.13, pos["C10"][1] - 0.12)
+    # C18 (metile su C13), C19 (metile su C10, junction A/B) e C21 (metile
+    # su C20): posizionati con RICERCA ANGOLARE nel piano — 72 angoli attorno
+    # all'ancora, si tiene quello con la massima distanza minima dai pesanti
+    # già piazzati (bug 12/11: formule fisse collidevano a seconda dell'
+    # orientamento del pentagono: C15-C13 0.02 nm, C19 su C5/C1/C7/C9...)
+    placed = {k: v for k, v in pos.items()}
+
+    def _place_methyl(anchor: str, radius: float) -> tuple[float, float]:
+        ax, az = placed[anchor]
+        best_ang, best_d = 0.0, -1.0
+        for k in range(72):
+            ang = k * (2.0 * math.pi / 72.0)
+            px, pz = ax + radius * math.cos(ang), az + radius * math.sin(ang)
+            dmin = min(
+                math.dist((px, pz), pv)
+                for name, pv in placed.items()
+                if name != anchor
+            )
+            if dmin > best_d:
+                best_d, best_ang = dmin, ang
+        return (ax + radius * math.cos(best_ang), az + radius * math.sin(best_ang))
+
+    pos["C18"] = _place_methyl("C13", 0.20)
+    placed["C18"] = pos["C18"]
+    pos["C19"] = _place_methyl("C10", 0.22)
+    placed["C19"] = pos["C19"]
     # --- Catena isoottile da C17 (zigzag verso v decrescente) ---
+    # parte radiale dal centro del pentagono (via da C16), poi zigzag
     cx, cz = pos["C17"]
-    for j, name in enumerate(("C20", "C22", "C23", "C24", "C25", "C26", "C27")):
+    dc20 = (cx - cD[0], cz - cD[1])
+    dl20 = math.hypot(*dc20)
+    cx, cz = cx + 0.15 * dc20[0] / dl20, cz + 0.15 * dc20[1] / dl20
+    pos["C20"] = (cx, cz)
+    for j, name in enumerate(("C22", "C23", "C24", "C25", "C26", "C27")):
         cx = cx + (0.05 if j % 2 == 0 else -0.05)
         cz = cz - 0.148
         pos[name] = (cx, cz)
-    pos["C21"] = (pos["C20"][0] + 0.12, pos["C20"][1] + 0.05)
+    # C21 (metile su C20): ricerca angolare con C17 e la catena già piazzati
+    placed["C20"] = pos["C20"]
+    pos["C21"] = _place_methyl("C20", 0.14)
+    placed["C21"] = pos["C21"]
     # --- OH sul C3 (verso v positivo = acqua) ---
     pos["O3"] = (pos["C3"][0] + 0.1, pos["C3"][1] + 0.11)
     pos["H3'"] = (pos["O3"][0] + 0.08, pos["O3"][1] + 0.08)

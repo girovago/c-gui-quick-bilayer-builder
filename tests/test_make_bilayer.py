@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 
@@ -549,3 +550,26 @@ def test_make_bilayer_allow_generic_atoms(tmp_path, monkeypatch):
     assert metrics["ff_reason"] is not None
     # la console non stampa spessore P-P come risultato valido
     assert "Metriche: spessore P-P" not in result.stdout
+
+
+def test_sterane_offsets_no_clashes():
+    """Geometria CHL1: nessuna coppia di atomi pesanti sotto 0.09 nm.
+
+    Bug 12/11/2026: il pentagono D poteva orientarsi verso l'interno
+    dell'anello C (C15-C13 = 0.02 nm) e i metili fissi collidevano
+    (C19 su C5/C9, C16-C20). Con un frame degenere pdb2gmx costruisce
+    idrogeni NaN -> editconf inquina l'intero boxed.gro -> solvate fallito.
+    """
+    pos = mb._sterane_offsets()
+    names = sorted(pos)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            dist = math.dist(pos[a], pos[b])
+            assert dist >= 0.09, f"clash CHL1 {a}-{b} = {dist:.4f} nm"
+    # backbone legato: i vicini rtp noti restano a distanza di legame
+    for pair in (("C15", "C16"), ("C16", "C17"), ("C17", "C20"),
+                 ("C20", "C22"), ("C18", "C13"), ("C19", "C10"),
+                 ("C21", "C20"), ("C15", "C14")):
+        a, b = pair
+        dist = math.dist(pos[a], pos[b])
+        assert 0.10 <= dist <= 0.25, f"legame/aggancio {a}-{b} = {dist:.3f} nm"
