@@ -299,7 +299,7 @@
         // metriche reali del build (metrics.json in system/, servito da API):
         // il pannello "Metriche build" del wizard mostra i numeri veri
         try {
-          buildMetrics = await api(`/api/files/${p.jobid}/system/metrics.json`);
+          buildMetrics = await api(`/api/files/${p.jobid}/metrics.json`);
           if (!buildMetrics?.natoms) buildMetrics = null; // risposta non valida
         } catch {
           buildMetrics = null; // build senza metriche (es. --run-gmx fallito)
@@ -369,6 +369,15 @@
       } catch (e) {
         flash("err", e.message);
       }
+    }
+  }
+
+  async function copyPath(path) {
+    try {
+      await navigator.clipboard.writeText(path);
+      flash("ok", "Percorso copiato: " + path);
+    } catch {
+      flash("err", "Copia non riuscita (permesso clipboard): " + path);
     }
   }
 
@@ -517,21 +526,21 @@
   </header>
 
   {#if loginOpen}
-    <div class="fixed inset-0 z-[60] flex items-center justify-center" aria-hidden="true">
-      <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" role="button" tabindex={0} aria-label="Chiudi" onclick={() => (loginOpen = false)} onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") loginOpen = false; }}></div>
-      <div class="bg-white rounded-2xl border border-zinc-200 p-6 shadow-2xl w-full max-w-xs mx-4">
-        <h2 class="mb-4 text-lg font-semibold text-zinc-900">Login CHARMM-GUI</h2>
-        <p class="mb-4 text-xs text-zinc-500 leading-relaxed">Inserisci email e password di CHARMM-GUI. <b>Non salvamo nulla su disco</b>: il token resta solo in RAM del server locale e svanisce al riavvio o al logout.</p>
+    <div class="fixed inset-0 z-[60] flex items-center justify-center" onkeydown={(e) => { if (e.key === "Escape") loginOpen = false; }}>
+      <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" aria-hidden="true" role="button" tabindex={0} aria-label="Chiudi" onclick={() => (loginOpen = false)} onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") loginOpen = false; }}></div>
+      <div class="bg-white rounded-2xl border border-zinc-200 p-6 shadow-2xl w-full max-w-xs mx-4" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <h2 id="login-title" class="mb-4 text-lg font-semibold text-zinc-900">Login CHARMM-GUI</h2>
+        <p class="mb-4 text-xs text-zinc-500 leading-relaxed">Inserisci email e password di CHARMM-GUI. <b>Non salviamo nulla su disco</b>: il token resta solo in RAM del server locale e svanisce al riavvio o al logout.</p>
         <form onsubmit={doLogin}>
           <div class="space-y-3 mb-4">
             <label class="block text-xs font-medium text-zinc-700" for="login-email">Email</label>
-            <input id="login-email" type="email" bind:value={loginData.email} placeholder="nome@istituto.it" class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
+            <input id="login-email" type="email" bind:value={loginData.email} placeholder="nome@istituto.it" autofocus class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
             <label class="block text-xs font-medium text-zinc-700" for="login-password">Password</label>
             <input id="login-password" type="password" bind:value={loginData.password} class="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" required />
           </div>
           <div class="flex gap-3">
             <button type="button" class="flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100" onclick={() => (loginOpen = false)}>Annulla</button>
-            <button type="submit" disabled={loginBusy} class="flex-1 rounded-lg bg-cyan-600 px-3 py-2 text-sm text-white font-medium hover:bg-cyan-700 disabled:opacity-60">{loginBusy ? "Accesso…" : "Accedi"}</button>
+            <button type="submit" disabled={loginBusy} class="flex-1 rounded-lg bg-cyan-700 px-3 py-2 text-sm text-white font-medium hover:bg-cyan-800 disabled:opacity-60">{loginBusy ? "Accesso…" : "Accedi"}</button>
           </div>
           {#if loginErr}
             <div class="mt-3 text-[11px] text-red-600 bg-red-50/40 rounded p-2">{loginErr}</div>
@@ -542,7 +551,7 @@
     </div>
   {/if}
 
-  <main class="grid min-w-0 gap-4 sm:grid-cols-[340px_minmax(0,1fr)_340px] lg:grid-cols-[380px_minmax(0,1fr)_minmax(360px,1fr)]">
+  <main class="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[380px_minmax(0,1fr)_minmax(360px,1fr)]">
     <!-- ============================================ colonna FORM -->
     <section class="min-w-0 rounded-lg border border-zinc-200 bg-white p-3" aria-label="Costruzione">
       <div class="mb-3 flex gap-1" role="tablist" aria-label="Modalità di composizione">
@@ -620,9 +629,9 @@
         {/if}
       </div>
       {#if compareJobId}
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-2" aria-label="Confronto affiancato">
-          <Molecule jobid={record?.outdir ? selectedId : null} />
-          <Molecule jobid={compareJobId} />
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-2" aria-label="Confronto affiancato">
+          <Molecule jobid={record?.outdir ? selectedId : null} compact />
+          <Molecule jobid={compareJobId} compact />
         </div>
       {:else}
         <Molecule jobid={record?.outdir ? selectedId : null} />
@@ -645,7 +654,7 @@
       {#if jobs.length === 0}
         <p class="mb-3 text-xs text-zinc-500">archivio vuoto — invia il primo build dal form</p>
       {:else}
-        <ul class="mb-3 max-h-64 space-y-1 overflow-auto">
+        <ul class="mb-3 max-h-[42vh] space-y-1 overflow-auto">
           {#each jobs as j (j.jobid)}
             <li>
               <button
@@ -656,9 +665,14 @@
                 aria-pressed={selectedId === j.jobid}
               >
                 <span class="font-mono">{j.jobid}</span>
-                <span class={`rounded px-1 text-[10px] ${j.state === "done" ? "bg-green-100 text-green-800" : j.state === "error" ? "bg-red-100 text-red-800" : "bg-zinc-200 text-zinc-700"}`}>
-                  {(j.state ?? "?")}
+                <span class={`rounded px-1 text-[10px] ${j.state === "done" ? "bg-green-100 text-green-800" : j.state === "error" ? "bg-red-100 text-red-800" : "bg-cyan-100 text-cyan-800"}`}>
+                  {j.state === "running" || j.state === "pending" ? "● " : ""}{(j.state ?? "?")}
                 </span>
+                {#if String(j.jobid).startsWith("local-")}
+                  <span class="ml-1 rounded bg-zinc-100 px-1 font-mono text-[9px] text-zinc-500" title="build locale GROMACS (nessuna coda CHARMM-GUI)">LOC</span>
+                {:else}
+                  <span class="ml-1 rounded bg-zinc-100 px-1 font-mono text-[9px] text-zinc-500" title="job CHARMM-GUI">CG</span>
+                {/if}
                 {#if j.label}
                   <span class="ml-1 text-zinc-600">{j.label}</span>
                 {/if}
@@ -698,6 +712,15 @@
             >
               Clona nel form
             </button>
+            {#if record.outdir}
+              <button
+                class="rounded border border-zinc-600 px-2 py-1 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                onclick={() => copyPath(record.outdir)}
+                title={`Copia il percorso su disco: ${record.outdir}`}
+              >
+                Copia percorso
+              </button>
+            {/if}
           </div>
           {#if status.rank && /ahead|pending/i.test(status.rank)}
             <p class="mt-2 text-[11px] leading-snug text-amber-700">
@@ -710,8 +733,8 @@
               <ul class="mt-1 max-h-40 space-y-0.5 overflow-auto font-mono text-[11px] text-zinc-600">
                 {#each files as f (f.name)}
                   <li class="flex justify-between gap-2" style="padding-left: {0.75 * Math.max(0, f.depth - 1)}rem">
-                    {#if f.name.endsWith('.pdb') || f.name.endsWith('.txt') || f.name.endsWith('.top')}
-                      <a href={`/api/files/${selectedId}/${f.name}`} target="_blank" rel="noreferrer" class="truncate underline decoration-dotted hover:text-cyan-700">{f.name}</a>
+                    {#if !String(f.name).endsWith('/')}
+                      <a href={`/api/files/${selectedId}/${f.name}`} target="_blank" rel="noreferrer" class="truncate underline decoration-dotted hover:text-cyan-700" title="scarica">{f.name}</a>
                     {:else}
                       <span class="truncate">{f.name}</span>
                     {/if}

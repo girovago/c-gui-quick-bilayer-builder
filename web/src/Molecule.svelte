@@ -4,7 +4,7 @@
   // vendORIZZATA in web/public/vendor/ngl.js (three.js incluso, no CDN).
   import { onMount } from "svelte";
 
-  let { jobid = null } = $props();
+  let { jobid = null, compact = false } = $props();
 
   let holder = $state(null);
   // TRAPPOLA Svelte 5 (11/11/2026): lo Stage NGL NON va in $state — Svelte lo
@@ -332,7 +332,7 @@
   });
 </script>
 
-<div class="relative min-h-[80vh] overflow-hidden rounded-lg border border-zinc-800 bg-[#0b0f1a]">
+<div class="relative {compact ? "min-h-[45vh]" : "min-h-[80vh]"} overflow-hidden rounded-lg border border-zinc-800 bg-[#0b0f1a]">
   <div bind:this={holder} class="absolute inset-0"></div>
 
   {#if state !== "ready"}
@@ -371,7 +371,7 @@
     class="absolute top-2 right-2 z-10 flex flex-wrap items-center justify-end gap-1.5 rounded bg-white/85 p-1.5 text-xs text-zinc-700 backdrop-blur transition-opacity"
     class:opacity-0={state !== "ready"}
     class:pointer-events-none={state !== "ready"}
-    role="toolbar"
+    role="group"
     aria-label="Strumenti vista 3D"
   >
     <label class="flex items-center gap-1">
@@ -425,7 +425,7 @@
     {/if}
     <button
       type="button"
-      class="rounded border border-zinc-300 px-1.5 py-0.5 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+      class="min-h-6 rounded border border-zinc-300 px-2 py-1 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
       onclick={resetView}
       title="Riporta la scena al centro e allo zoom originale"
     >
@@ -433,7 +433,7 @@
     </button>
     <button
       type="button"
-      class="rounded border border-zinc-300 px-1.5 py-0.5 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+      class="min-h-6 rounded border border-zinc-300 px-2 py-1 hover:bg-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
       onclick={snapshot}
       title="Scarica un PNG della vista corrente"
     >

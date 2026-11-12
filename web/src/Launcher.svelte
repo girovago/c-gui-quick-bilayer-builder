@@ -216,17 +216,17 @@
     </div>
   {/if}
   <!-- Stepper -->
-  <div class="flex items-center gap-1 overflow-x-auto rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
+  <div class="flex items-center gap-1 overflow-x-auto rounded-xl border border-zinc-200 bg-white p-2 shadow-sm">
     {#each STEPS as label, i}
       {#if i > 0}<div class="h-px w-4 shrink-0 bg-zinc-200"></div>{/if}
-      <button type="button" class="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-400 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
+      <button type="button" disabled={i + 1 > maxVisited && i + 1 !== step} class="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all disabled:cursor-not-allowed {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-400 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
         <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="whitespace-nowrap font-medium text-[11px] sm:text-xs">{label}</span>
       </button>
     {/each}
   </div>
   <!-- STEP 1 -->
   {#if step === 1}
-    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+    <div class="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Che tipo di sistema costruisci?</h2><p class="text-sm text-zinc-500">Scegli il tipo di struttura da generare</p></div>
       <div class="grid grid-cols-2 gap-4">
         {#each [{ id: "lipid", icon: "🧪", title: "Bilayer lipidico", sub: "Composizione due foglietti" }, { id: "protein", icon: "🧫", title: "Proteina", sub: "PDB ID o file — embed nella membrana (opzione 1)" }, { id: "dna", icon: "🧬", title: "DNA", sub: "Sequenza nucleotidi" }, { id: "rna", icon: "🧬", title: "RNA", sub: "Sequenza nucleotidi" }, { id: "small-mol", icon: "💊", title: "Small molecule", sub: "PDB / SDF" }] as t}
@@ -241,7 +241,7 @@
 
   <!-- STEP 2 -->
   {#if step === 2}
-    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+    <div class="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Composizione</h2><p class="text-sm text-zinc-500">Scegli i lipidi per ogni foglietto</p></div>
       {#if buildType !== "lipid"}
         <div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800"><span class="font-semibold">ℹ️ Builder locale:</span> testato per lipidi. Per proteine/DNA/RNA/small molecules <b>verrà inviato automaticamente a CHARMM-GUI</b> al click su "Crea struttura".</div>
@@ -353,7 +353,7 @@
 
   <!-- STEP 3 -->
   {#if step === 3}
-    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+    <div class="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Ambiente</h2><p class="text-sm text-zinc-500">Box, solvente e ioni</p></div>
       <div class="grid grid-cols-1 gap-4">
         <div class="space-y-4">
@@ -376,7 +376,7 @@
   {/if}
   <!-- STEP 4 -->
   {#if step === 4}
-    <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+    <div class="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Riepilogo</h2><p class="text-sm text-zinc-500">Verifica prima di generare</p></div>
       {#if buildType !== "lipid"}
         <div class="mb-5 rounded-lg bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800"><span class="font-semibold">ℹ️ Builder locale:</span> testato per lipidi. Per proteine/DNA/RNA/small molecules <b>verrà inviato automaticamente a CHARMM-GUI</b> al click su "Crea struttura".</div>
@@ -412,7 +412,7 @@
       {#if buildLog}
         <div class="mt-5 rounded-lg bg-zinc-900 p-4 max-h-64 overflow-y-auto"><div class="flex items-center gap-2 mb-3"><span class="text-cyan-400 font-bold text-[10px]">LOG GROMACS</span><button type="button" onclick={onLogClear} class="text-zinc-500 hover:text-white">✕</button></div><pre class="text-[10px] text-zinc-300 overflow-x-auto">{buildLog}</pre></div>
       {/if}
-      <div class="mt-6 flex flex-col sm:flex-row gap-4"><button type="button" class="flex-1 rounded-xl bg-emerald-700 px-6 py-3.5 text-base font-semibold text-white hover:bg-emerald-800 shadow-lg shadow-emerald-200 disabled:bg-zinc-300 disabled:cursor-not-allowed" onclick={create} disabled={propLocalBusy || !stepValid()}>{#if propLocalBusy}<span class="inline-block w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></span>{buildType === "lipid" ? "Costruzione in corso…" : "Invio in corso…"}{:else}{buildType === "lipid" ? "▶ Crea struttura (locale, GROMACS)" : "▶ Invia a CHARMM-GUI"}{/if}</button><button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3.5 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200" onclick={submit}>Invia a CHARMM-GUI</button></div>
+      <div class="mt-6 flex flex-col sm:flex-row gap-4">{#if buildType === "lipid"}<button type="button" class="flex-1 rounded-xl bg-emerald-700 px-6 py-3.5 text-base font-semibold text-white hover:bg-emerald-800 shadow-lg shadow-emerald-200 disabled:bg-zinc-300 disabled:cursor-not-allowed" onclick={create} disabled={propLocalBusy || !stepValid()}>{#if propLocalBusy}<span class="inline-block w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></span>Costruzione in corso…{:else}▶ Crea struttura (locale, GROMACS){/if}</button>{/if}<button type="button" class="flex-1 rounded-xl bg-cyan-700 px-6 py-3.5 text-base font-semibold text-white hover:bg-cyan-800 shadow-lg shadow-cyan-200" onclick={submit}>Invia a CHARMM-GUI</button></div>
       <div class="mt-4 flex justify-between"><button type="button" class="rounded-xl bg-zinc-900 px-6 py-3 text-base font-semibold text-white hover:bg-zinc-700 shadow-lg shadow-zinc-200" onclick={back}>← Indietro</button></div>
     </div>
   {/if}
