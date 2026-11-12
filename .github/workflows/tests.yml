@@ -17,7 +17,7 @@ jobs:
 
       # uv ufficiale (gestisce anche la cache di uv; setup-python NON la supporta)
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v10
 
       - name: Set up Python
         uses: actions/setup-python@v5
