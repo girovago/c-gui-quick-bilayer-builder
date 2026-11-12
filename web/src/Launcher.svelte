@@ -62,6 +62,15 @@
     next[id] = clean;
     setCounts(next);
   }
+  // il campo quantità VUOTO non elimina il lipide (richiesta Giorgio 12/11):
+  // si cancella per riscrivere; su blur il numero ripristina la quantità
+  function qtyInput(id, e) {
+    if (e.target.value === "") return; // niente setQty: la riga resta
+    setQty(id, +e.target.value);
+  }
+  function qtyBlur(id, e) {
+    if (e.target.value === "") e.target.value = countOf(id);
+  }
   function add(id) { setQty(id, countOf(id) + 1); }
   function removeOne(id) { setQty(id, countOf(id) - 1); }
   function remove(id) { const n = { ...counts() }; delete n[id]; setCounts(n); }
@@ -207,11 +216,11 @@
     </div>
   {/if}
   <!-- Stepper -->
-  <div class="flex items-center gap-1 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
+  <div class="flex items-center gap-1 overflow-x-auto rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm">
     {#each STEPS as label, i}
-      {#if i > 0}<div class="h-px flex-1 bg-zinc-200 sm:w-4 md:w-6"></div>{/if}
-      <button type="button" class="flex min-w-[2.25rem] items-center justify-center gap-2 rounded-xl px-2 py-2 text-sm font-medium transition-all sm:min-w-0 sm:justify-start sm:px-4 md:px-6 {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-300 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
-        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="whitespace-nowrap font-medium xs:inline text-[10px] sm:text-xs">{label}</span>
+      {#if i > 0}<div class="h-px w-4 shrink-0 bg-zinc-200"></div>{/if}
+      <button type="button" class="flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all {step === i + 1 ? 'bg-cyan-500 text-white shadow-md shadow-cyan-200' : i + 1 <= maxVisited ? 'text-zinc-600 hover:bg-zinc-50' : 'text-zinc-400 hover:bg-zinc-50'}" onclick={() => goto(i + 1)} aria-current={step === i + 1 ? "step" : undefined}>
+        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs {step === i + 1 ? 'bg-white text-cyan-500' : i + 1 <= maxVisited ? 'bg-zinc-200 text-zinc-700' : 'bg-zinc-100 text-zinc-400'}">{i + 1}</span><span class="whitespace-nowrap font-medium text-[11px] sm:text-xs">{label}</span>
       </button>
     {/each}
   </div>
@@ -257,7 +266,7 @@
           {/if}
           <span class="ml-auto text-xs font-medium text-zinc-500">{totalCounts(counts())} lipidi</span>
         </div>
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 gap-4">
           <div class="rounded-xl border border-zinc-200 p-3">
             <div class="mb-2 flex items-center gap-2">
               <h3 class="shrink-0 text-sm font-semibold text-zinc-900">Catalogo</h3>
@@ -281,12 +290,12 @@
                   <div class="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5">
                     <span class="h-2 w-2 rounded-full shrink-0" style="background-color: {CAT_COLORS[LIPID_CATALOG.find(l => l.id === id)?.cat] || '#a1a1aa'}"></span>
                     <span class="w-16 shrink-0 text-xs font-semibold text-zinc-900">{id}</span>
-                    <input type="number" min="1" max="4096" value={n} oninput={(e) => setQty(id, +e.target.value)} aria-label="Quantità {id}" class="w-16 rounded-md border border-zinc-300 px-1.5 py-0.5 text-center text-xs font-bold tabular-nums text-zinc-900 focus:border-cyan-500 focus:outline-none" />
+                    <input type="number" min="1" max="4096" value={n} oninput={(e) => qtyInput(id, e)} onblur={(e) => qtyBlur(id, e)} aria-label="Quantità {id}" class="w-16 rounded-md border border-zinc-300 px-1.5 py-1 text-center text-xs font-bold tabular-nums text-zinc-900 focus:border-cyan-500 focus:outline-none" />
                     <span class="hidden text-[10px] text-zinc-400 xl:inline">qty</span>
                     <div class="ml-auto flex items-center gap-1">
                       <button type="button" onclick={() => removeOne(id)} class="h-6 w-6 rounded-full bg-zinc-100 text-sm font-bold text-zinc-600 hover:bg-zinc-200" aria-label="-1 {id}">−</button>
                       <button type="button" onclick={() => add(id)} class="h-6 w-6 rounded-full bg-cyan-500 text-sm font-bold text-white hover:bg-cyan-600" aria-label="+1 {id}">+</button>
-                      <button type="button" onclick={() => remove(id)} class="ml-0.5 px-1 text-xs text-zinc-400 hover:text-red-500" aria-label="Rimuovi {id}">✕</button>
+                      <button type="button" onclick={() => remove(id)} class="ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-red-200 bg-red-50 text-xs font-bold text-red-600 hover:border-red-300 hover:bg-red-100" aria-label="Rimuovi {id}" title="Rimuovi {id} dalla lista">✕</button>
                     </div>
                   </div>
                 {/each}
@@ -346,7 +355,7 @@
   {#if step === 3}
     <div class="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
       <div class="mb-6"><h2 class="text-lg font-semibold text-zinc-900">Ambiente</h2><p class="text-sm text-zinc-500">Box, solvente e ioni</p></div>
-      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 gap-8">
+      <div class="grid grid-cols-1 gap-4">
         <div class="space-y-4">
           <h3 class="text-sm font-semibold text-zinc-900">Box (nm)</h3>
           <div class="grid grid-cols-3 gap-3">
