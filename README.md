@@ -311,4 +311,4 @@ See [`SOURCES.md`](SOURCES.md).
 - **Scienza**: mescolamento laterale reale, APL sperimentali, bilanciamento cariche automatico con `genion`, geometria steranica dedicata per il colesterolo.
 - **Progetto scritto con assistenza LLM** — verificato con 186 test unitari e audit scientifico; valida sempre con i tuoi dati prima dell'uso in produzione.
 
-> Attualmente cerco un dottorato/postdoc finanziato in CADD/drug discovery (Europa o Italia) — contattami pure! 😊
+> Attualmente cerco un dottorato finanziato o un lavoro in CADD/drug discovery (Europa o Italia) — contattami pure! 😊
