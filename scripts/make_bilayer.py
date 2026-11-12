@@ -2346,6 +2346,19 @@ def _gmx_pipeline(
         return False
     _mark(STEP_GROMPP, "done")
     print("gmx grompp: OK - minim.tpr pronto")
+
+    # PDB del sistema COMPLETO (lipidi + solvente + ioni) per la vista 3D:
+    # step1_pdbreader.pdb viene scritto PRIMA di solvate e non li contiene,
+    # quindi la GUI mostrava solo i lipidi senza acqua e ioni.
+    step5_pdb = str((system_dir / "step5_system.pdb").resolve())
+    r = _gmx(["editconf", "-f", ionized_gro, "-o", step5_pdb])
+    if r.returncode == 0:
+        print("gmx editconf: step5_system.pdb scritto (sistema completo: "
+              "lipidi + solvente + ioni)")
+    else:
+        print(f"AVVISO: editconf step5_system.pdb fallito: {r.stderr[-300:]}"
+              " (la vista 3D mostrera' solo i lipidi)", file=sys.stderr)
+
     if not minimize:
         print("gmx mdrun saltato (--minimize non richiesto): sistema pronto per l'equilibrazione")
         return True

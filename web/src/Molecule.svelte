@@ -229,6 +229,12 @@
       stage.__resume?.(); // autoView anima, poi il loop si spegne da solo (3s)
     } catch (e) {
       if (key !== lastRequested) return; // race: il messaggio vale solo per l'ultima richiesta
+      // step5_system.pdb = sistema completo (lipidi+solvente+ioni); se il build
+      // non l'ha prodotto (no solvate o vecchio build) torno su step1 (solo lipidi)
+      if (String(url).endsWith("step5_system.pdb")) {
+        load(key, `/api/files/${key}/step1_pdbreader.pdb`);
+        return;
+      }
       state = "error";
       message = String(e?.message ?? e);
     }
@@ -247,7 +253,9 @@
       isSample = false; // il badge sparirà al load: il job reale è quello vero
       if (jobid === lastLoaded) return;
       lastLoaded = jobid;
-      load(jobid, `/api/files/${jobid}/step1_pdbreader.pdb`);
+      // sistema COMPLETO con solvente+ioni se il build l'ha prodotto,
+      // altrimenti fallback automatico su step1 (solo lipidi)
+      load(jobid, `/api/files/${jobid}/step5_system.pdb`);
     } else {
       // nessun sistema estratto: struttura campione locale in scena
       isSample = true;

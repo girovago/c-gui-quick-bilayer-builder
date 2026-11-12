@@ -253,7 +253,8 @@ def _run_build_async(
     if payload.solvent:
         cmd += ["--solvent", payload.solvent]
     if payload.ions in ("KCl", "NaCl"):
-        cmd += ["--ion-type", payload.ions, "--ion-conc", "0.15"]
+        cmd += ["--ion-type", payload.ions,
+                "--ion-conc", str(payload.ion_conc)]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=BUILD_TIMEOUT_S)
     except subprocess.TimeoutExpired:
