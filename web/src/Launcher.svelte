@@ -364,6 +364,13 @@
             <div class="flex flex-col"><label class="text-xs text-zinc-500 mb-1">Z</label><input type="number" step="0.5" min="2" bind:value={boxZ} class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500" /></div>
           </div>
           <label class="flex items-center gap-3 mt-2"><input type="checkbox" bind:checked={centerStructure} class="accent-cyan-500" /><span class="text-sm text-zinc-700 cursor-pointer">Centra nel box</span></label>
+          {#if totalCounts(upperCounts) > 0}
+            <p class="text-[11px] leading-snug text-zinc-500">
+              Suggerito per {totalCounts(upperCounts)} lipidi/foglio:
+              <b class="text-zinc-700">{(Math.sqrt(totalCounts(upperCounts) * 0.56) + 1.8).toFixed(1)} × {(Math.sqrt(totalCounts(upperCounts) * 0.56) + 1.8).toFixed(1)} nm</b>
+              (sqrt(n × 0.56) + 1.8 di margine per l'idratazione e gli steroli)
+            </p>
+          {/if}
         </div>
         <div class="space-y-4">
           <div><label class="block text-sm font-semibold text-zinc-900 mb-3">Solvente</label><select bind:value={solvent} class="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"><option value="water">Acqua TIP3P</option><option value="none">Nessuno</option></select></div>

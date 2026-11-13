@@ -342,17 +342,21 @@ def parse_spec(spec: str | None) -> dict[str, int]:
 
 def _lattice_positions(
     n: int, box_x: float, box_y: float, jitter: float, seed: int = 42,
+    margin: float | None = None,
 ) -> list[tuple[float, float]]:
     """Distribuisce n punti su griglia rettangolare che riempie il box xy.
 
-    Il rettangolo utile è il box meno un margine 0.15 nm per lato (la metà
-    del margine +0.3 dell'autobox, così l'APL misurata resta nell'attesa).
+    Il rettangolo utile è il box meno il margine per lato. Con margin=None
+    resta 0.15 (comportamento storico); per il bilayer con steroli serve
+    ~0.90: lo sterano con tilt 15° estende la catena isoottile fino a
+    ~0.86 nm dal punto di griglia (13/11/2026: i lipidi uscivano dal box).
     jitter=0 -> griglia regolare (layout planar); jitter>0 disordine
     laterale (layout fluid), ampiezza limitata a metà passo di griglia.
     """
     if n <= 0:
         return []
-    margin = min(0.15, box_x / 6.0, box_y / 6.0)
+    margin = margin if margin is not None else 0.15
+    margin = min(margin, box_x / 6.0, box_y / 6.0)
     span_x = max(box_x - 2 * margin, 0.05)
     span_y = max(box_y - 2 * margin, 0.05)
     cols = max(1, round(math.sqrt(n * span_x / span_y)))
@@ -774,11 +778,24 @@ def _sterol_atom_lines(
         return (tx * cos_p - w * sin_p, tx * sin_p + w * cos_p, tz)
 
     # coordinate locali (u, w, v): backbone da off (w=0), H piazzati nel frame
+    # PUCKER degli anelli: esagoni PLANARI regolari = carbonio con 3 vicini
+    # pesanti simmetrici (somma dei vettori = 0) -> pdb2gmx costruisce H NaN
+    # (bug 13/11, resno-dipendente). Pucker alternato +/-0.03 lungo v = anelli
+    # a sedia leggera (piu' realistici) e frame non degenere.
+    heavy_nbrs: dict[str, int] = {}
+    for a, b in bonds:
+        heavy_nbrs[a] = heavy_nbrs.get(a, 0) + (0 if b.startswith("H") else 1)
+        heavy_nbrs[b] = heavy_nbrs.get(b, 0) + (0 if a.startswith("H") else 1)
     local: dict[str, tuple[float, float, float]] = {}
+    idx_pucker = 0
     for name, _atype, _charge, _group in atoms_info:
         if name in off:
             u, v = off[name]
-            local[name] = (u, 0.0, v)
+            if heavy_nbrs.get(name, 0) >= 3:
+                local[name] = (u, 0.03 * (1 if idx_pucker % 2 else -1), v)
+                idx_pucker += 1
+            else:
+                local[name] = (u, 0.0, v)
 
     # idrogeni: vicino al partner di legame (dal grafo dei bonds rtp)
     bond_map: dict[str, list[str]] = {}
@@ -1086,6 +1103,21 @@ def _lipid_atom_lines(
 
     counter = {"chain_step": 0}
 
+    # walk XY limitato della catena: la catena deve restare entro 0.25 nm
+    # dall'asse del lipide (x,y) — senza limite il random walk laterale
+    # accumulato poteva allontanare la catena fino a ~4 nm (lipidi
+    # "orizzontali" e fuori box, 13/11/2026)
+    MAX_CHAIN_DEV = 0.25
+
+    def _limited_xy(nx: float, ny: float) -> tuple[float, float]:
+        """Riporta la posizione proposta entro MAX_CHAIN_DEV dall'asse (x,y)."""
+        dx, dy = nx - x, ny - y
+        d = math.hypot(dx, dy)
+        if d <= MAX_CHAIN_DEV:
+            return nx, ny
+        k = MAX_CHAIN_DEV / d
+        return x + dx * k, y + dy * k
+
     def _place(atom: str, parent: str) -> None:
         px, py, pz = coords[parent]
         a_is_ester = cat.get(atom) == "O_ester"
@@ -1095,7 +1127,8 @@ def _lipid_atom_lines(
             # O disossolo: tenue offset dal partner verso il centro
             counter["chain_step"] += 1
             az = 0.6 * counter["chain_step"]
-            coords[atom] = (px + 0.10 * math.cos(az), py + 0.10 * math.sin(az), pz - 0.06)
+            ox, oy = _limited_xy(px + 0.10 * math.cos(az), py + 0.10 * math.sin(az))
+            coords[atom] = (ox, oy, pz - 0.06)
             return
         if a_is_ester and [p for p in nbrs.get(atom, []) if p[0] == "C" and p not in visited]:
             # O ponte (ester): tra parent e il C da esplorare
@@ -1105,11 +1138,8 @@ def _lipid_atom_lines(
             depth = _depth_remaining(nxt, memo)
             counter["chain_step"] += 1
             az = 0.6 * counter["chain_step"]
-            coords[atom] = (
-                px + 0.10 * math.cos(az),
-                py + 0.10 * math.sin(az),
-                pz - dz_step_for(depth, pz),
-            )
+            ox, oy = _limited_xy(px + 0.10 * math.cos(az), py + 0.10 * math.sin(az))
+            coords[atom] = (ox, oy, pz - dz_step_for(depth, pz))
         else:
             # C di catena: z-step uniforme, laterale complessivo da legame
             memo2: dict[str, int] = {}
@@ -1118,11 +1148,8 @@ def _lipid_atom_lines(
             dz = dz_step_for(depth, pz)
             lateral = math.sqrt(max(BOND_CC ** 2 - dz ** 2, 0.02 ** 2))
             az = 0.6 * counter["chain_step"] * (1 if counter["chain_step"] % 2 else -1)
-            coords[atom] = (
-                px + lateral * math.cos(az),
-                py + lateral * math.sin(az),
-                pz - dz,
-            )
+            cx, cy = _limited_xy(px + lateral * math.cos(az), py + lateral * math.sin(az))
+            coords[atom] = (cx, cy, pz - dz)
 
     def dz_step_for(depth: int, pz: float) -> float:
         span = abs(pz - TAIL_END_Z)
@@ -1333,6 +1360,61 @@ def _lipid_atom_lines(
 MIN_HEAVY_DIST_A = 0.9  # angstrom
 
 
+def _add_conect_to_pdb(pdb_path: str, bonds_by_name: dict[str, set[tuple[str, str]]]) -> int:
+    """Aggiunge le CONECT records a un PDB di output gmx (step5_system.pdb).
+
+    editconf non trascrive i legami (il .gro non ce li ha): senza CONECT i
+    viewer (NGL) inferiscono i bond per distanza e, dove le catene di lipidi
+    vicini si toccano, compaiono linee inter-lipide in vista stick.
+    Mappa (resname, resno) -> serial dagli ATOM; i bond vengono dal rtp della
+    specie (SOL: OW-HW1/HW2 hard-coded). Ritorna il numero di righe CONECT.
+    """
+    lines = open(pdb_path, encoding="utf-8", errors="replace").readlines()
+    if any(row.startswith("CONECT") for row in lines):
+        return 0
+    by_res: dict[tuple[str, str], dict[str, int]] = {}
+    for line in lines:
+        if not line.startswith("ATOM"):
+            continue
+        try:
+            serial = int(line[6:11])
+        except ValueError:
+            continue
+        name = line[12:16].strip()
+        rest = line[17:].split()
+        if len(rest) < 2:
+            continue
+        by_res.setdefault((rest[0], rest[1]), {})[name] = serial
+    conect_rows: list[str] = []
+    for (resname, _resno), name_serial in by_res.items():
+        if resname == "SOL":
+            bonds = {("OW", "HW1"), ("OW", "HW2")}
+        else:
+            rtp_name = max(
+                (r for r in bonds_by_name if resname == r or resname.startswith(r)),
+                key=len, default=None,
+            )
+            bonds = bonds_by_name.get(rtp_name, set())
+        for a, b in sorted(bonds):
+            sa, sb = name_serial.get(a), name_serial.get(b)
+            if sa and sb:
+                conect_rows.append(f"CONECT{min(sa, sb):5d}{max(sa, sb):5d}\n")
+    if not conect_rows:
+        return 0
+    # inserisce le CONECT prima di END/ENDMDL (dopo tutti gli ATOM)
+    out, inserted = [], False
+    for line in lines:
+        if not inserted and line.startswith(("END", "ENDMDL")):
+            out.extend(sorted(set(conect_rows)))
+            inserted = True
+        out.append(line)
+    if not inserted:
+        out.extend(sorted(set(conect_rows)))
+    with open(pdb_path, "w") as f:
+        f.writelines(out)
+    return len(conect_rows)
+
+
 def _text_file_has_nan(path: str) -> bool:
     """True se un file PDB/GRO contiene coordinate 'nan'.
 
@@ -1472,8 +1554,20 @@ def generate_pdb(
     # posizioni su griglia che riempie il box (l'APL reale la fissa il box,
     # non la composizione: i lipidi si distribuiscono su tutta l'area)
     jitter = 0.30 if layout == "fluid" else 0.0
-    upper_positions = _lattice_positions(sum(upper.values()), box_x, box_y, jitter, seed=42)
-    lower_positions = _lattice_positions(sum(lower.values()), box_x, box_y, jitter, seed=7)
+    # margine 0.90: lo sterano con tilt 15° estende ~0.86 nm dal punto di
+    # griglia — con il vecchio 0.15 i lipidi ai bordi uscivano dal box
+    upper_positions = _lattice_positions(
+        sum(upper.values()), box_x, box_y, jitter, seed=42, margin=0.90)
+    lower_positions = _lattice_positions(
+        sum(lower.values()), box_x, box_y, jitter, seed=7, margin=0.90)
+    # clamp al box (in coordinate centrate), giusto di sicurezza
+    for _positions in (upper_positions, lower_positions):
+        lim = max(box_x / 2 - 0.90, 0.0), max(box_y / 2 - 0.90, 0.0)
+        for k, (px, py) in enumerate(_positions):
+            _positions[k] = (
+                max(-lim[0], min(lim[0], px)),
+                max(-lim[1], min(lim[1], py)),
+            )
 
     # lista di specie per leaflet: assegnazione CASUALE specie<->posizione
     # (mescolamento laterale reale: nelle membrane le specie sono distribuite
@@ -2882,6 +2976,20 @@ def _gmx_pipeline(
     if r.returncode == 0:
         print("gmx editconf: step5_system.pdb scritto (sistema completo: "
               "lipidi + solvente + ioni)")
+        # CONECT dai bond rtp: senza questi il viewer inferisce legami
+        # inter-lipide dove le catene si toccano (arteffatti in vista stick)
+        bonds_by_name: dict[str, set[tuple[str, str]]] = {}
+        for side in (upper, lower):
+            for lname in side:
+                rtp_name = LIPID_NAME_MAP.get(lname, lname)
+                res = LIPID_RTP_DATA.get(rtp_name)
+                if res and rtp_name not in bonds_by_name:
+                    bonds_by_name[rtp_name] = {
+                        (a, b) for a, b in res.get("bonds", [])
+                    }
+        n_conect = _add_conect_to_pdb(step5_pdb, bonds_by_name)
+        if n_conect:
+            print(f"  CONECT aggiunte a step5_system.pdb: {n_conect}")
     else:
         print(f"AVVISO: editconf step5_system.pdb fallito: {r.stderr[-300:]}"
               " (la vista 3D mostrera' solo i lipidi)", file=sys.stderr)
