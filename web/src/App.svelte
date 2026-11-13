@@ -464,6 +464,10 @@
     scheduleDetail();
     refreshJobs();
     scheduleJobs();
+    // BUG 13/11: il polling del build NON veniva ripreso: se il build parte
+    // (o gira) mentre il tab e' nascosta, il timelapse resta congelato
+    // all'ultimo passo finche' il job non finisce
+    if (buildJobId) tickBuild();
   }
 
   onMount(() => {

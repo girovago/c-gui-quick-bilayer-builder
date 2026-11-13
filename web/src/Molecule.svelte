@@ -192,7 +192,21 @@
     }
   }
 
+  let homeCamera = null; // camera memorizzata al load (TRAPPA: autoView NGL
+  // su questa build non re-centra — non si notava perché il builder centra a 0)
+
   function resetView() {
+    // autoView() di NGL non recentra qui (verificato 13/11: camera invariata
+    // dopo pan manuale): ripristino la camera memorizzata al load della
+    // struttura, che per il builder (centrato a 0,0,0) e' la vista giusta
+    if (homeCamera && stage) {
+      try {
+        stage.viewer.camera.position.copy(homeCamera);
+        stage.viewer.update && stage.viewer.update();
+        stage.__resume?.();
+        return;
+      } catch {}
+    }
     if (compRef) compRef.autoView();
     stage?.__resume?.();
   }
@@ -235,6 +249,8 @@
     }
     if (waterRepr) waterRepr.setVisibility(showWater);
     if (ionRepr) ionRepr.setVisibility(showIons);
+    // memorizza la camera al load (autView non re-centra su questa build)
+    try { homeCamera = stage.viewer.camera.position.clone(); } catch {}
     comp.autoView();
   }
 
@@ -243,6 +259,12 @@
     lastRequested = key;
     stage.__resume?.(); // serve il loop per l'animazione di ingresso
     stage.removeAllComponents();
+    // reset camera al load: la home e' quella iniziale (il builder centra la
+    // struttura a 0,0,0) — autoView NGL non re-centra su questa build
+    try {
+      stage.viewer.camera.position.set(0, 0, -117.66);
+      stage.viewer.update && stage.viewer.update();
+    } catch {}
     waterRepr = null;
     ionRepr = null;
     mainRepr = null;
