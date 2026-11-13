@@ -1,5 +1,10 @@
 # C-gui Quick Bilayer Builder — v2.2
 
+[![Release](https://img.shields.io/github/v/release/girovago/c-gui-quick-bilayer-builder?include_prereleases&label=version)](https://github.com/girovago/c-gui-quick-bilayer-builder/releases)
+[![Tests](https://github.com/girovago/c-gui-quick-bilayer-builder/actions/workflows/tests.yml/badge.svg)](https://github.com/girovago/c-gui-quick-bilayer-builder/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-blue)
+
 Personal laboratory for **drug design / drug discovery**: molecular structure, molecular dynamics (MD) and CADD.
 
 ![Surface view — region-based hydration](docs/screenshots/1_viewer_surface.png)
