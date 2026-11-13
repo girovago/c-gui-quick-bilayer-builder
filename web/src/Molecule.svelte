@@ -4,7 +4,7 @@
   // vendORIZZATA in web/public/vendor/ngl.js (three.js incluso, no CDN).
   import { onMount } from "svelte";
 
-  let { jobid = null, compact = false } = $props();
+  let { jobid = null, compact = false, initialStyle = null } = $props();
 
   let holder = $state(null);
   // TRAPPOLA Svelte 5 (11/11/2026): lo Stage NGL NON va in $state — Svelte lo
@@ -22,6 +22,10 @@
   let isSample = $state(false); // TRUE = demo locale in scena (badge giallo)
   let isLocal = $state(false); // TRUE = build GROMACS generato in locale (badge azzurro)
   let style = $state("spacefill"); // stile della rappresentazione principale
+  // deep link (screenshot headless / link condivisibile): stile iniziale via prop
+  if (initialStyle && ["spacefill", "ball+stick", "licorice", "line", "surface", "cartoon"].includes(initialStyle)) {
+    style = initialStyle;
+  }
   let hint = $state(false); // pillola hint mouse (5s dal mount)
   let note = $state(""); // messaggio onesto su stile non applicabile (es. cartoon su lipidi puri)
   let lastLoaded = null;
@@ -132,7 +136,11 @@
     // colorScheme: per sistemi di soli lipidi uso "resname" (POPC/CHL1 con
     // colori distinti: il carbonio grigio di default su sfondo scuro era
     // quasi invisibile); per sistemi con proteine resta "chainname"
-    const scheme = comp && hasProtein() ? "chainname" : "resname";
+    // colorScheme: per sistemi di soli lipidi uso "residue" (colori distinti
+    // per resname; il carbonio grigio di default su sfondo scuro era quasi
+    // invisibile — NOTA: "resname" NON è uno schema NGL valido, "residue" sì);
+    // per sistemi con proteine resta "chainname"
+    const scheme = comp && hasProtein() ? "chainname" : "residue";
     // esclusione solvente dinamica: solo resname presenti, con OR esplicito
     // (spazio = AND in NGL: "not (SOL NA CL)" = not(vuoto) = TUTTO — bug toggle)
     const names = comp ? solventResNames(comp.structure) : [];
@@ -144,8 +152,10 @@
     if (name === "cartoon") return { sele: "protein" };
     if (name === "surface") {
       // superficie molecolare del solo soluto (senza solvente): MSMS pesa
-      // sull'acqua, quindi l'esclusione qui è anche una questione di performance
-      const p = { opacity: 0.85, smooth: 3, colorScheme: scheme };
+      // sull'acqua, quindi l'esclusione qui è anche una questione di performance.
+      // Colore UNIFORME grigio chiaro (look CHARMM-GUI): la palette resname
+      // dava un magenta elettrico su tutto il bilayer
+      const p = { opacity: 0.85, smooth: 3, colorScheme: "uniform", colorValue: "#e8e8e8" };
       if (clean) p.sele = clean;
       return p;
     }

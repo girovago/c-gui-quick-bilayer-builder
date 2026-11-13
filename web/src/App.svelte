@@ -415,6 +415,7 @@
   // ------------------------------------------------------------------ polling
   // Fix verifier (BUG 2): niente martelletta fissa a 2s sull'API reale.
   // - pausa completa della tab: document.hidden (visibilitychange);
+  let deepStyleProp = $state(null); // stile dal deep link (#job=...&style=...)
   // - intervallo adattivo: 2s solo in MOCK o se il job è "running" da <2min,
   //   altrimenti 20s;
   // - l'albero /api/files/{id} si ricarica solo al cambio di
@@ -484,6 +485,18 @@
     scheduleDetail();
     loadAuth(); // stato sessione CHARMM-GUI (RAM o disco-cache CLI)
     checkUpdate(false); // check aggiornamenti ad ogni avvio (no-repo/offline = silenzioso)
+    // deep link: #job=<id>&style=surface — seleziona il job e lo stile al load
+    // (usato per gli screenshot headless e per condividere un build)
+    try {
+      const h = new URLSearchParams(location.hash.slice(1));
+      const deepJob = h.get("job");
+      const deepStyle = h.get("style") ?? "";
+      if (deepJob) {
+        selectedId = deepJob;
+        refreshDetail();
+        deepStyleProp = deepStyle;
+      }
+    } catch {}
     return () => {
       clearTimeout(detailTimer);
       clearTimeout(jobsTimer);
@@ -638,7 +651,7 @@
           <Molecule jobid={compareJobId} compact />
         </div>
       {:else}
-        <Molecule jobid={record?.outdir ? selectedId : null} />
+        <Molecule jobid={record?.outdir ? selectedId : null} initialStyle={deepStyleProp} />
       {/if}
       <p class="mt-1 text-xs text-zinc-500">
         {#if compareJobId}
