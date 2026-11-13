@@ -1384,7 +1384,7 @@ def generate_pdb(
                 rot_rng=rng, serial_start=serial,
             )
             body.extend(block)
-            serial += sum(1 for l in block if l.startswith("ATOM"))
+            serial += sum(1 for bl in block if bl.startswith("ATOM"))
             rn += 1
         # --- Foglio inferiore (specchio del superiore) ---
         for idx, resname in enumerate(lower_species):
@@ -1394,7 +1394,7 @@ def generate_pdb(
                 rot_rng=rng, serial_start=serial,
             )
             body.extend(block)
-            serial += sum(1 for l in block if l.startswith("ATOM"))
+            serial += sum(1 for bl in block if bl.startswith("ATOM"))
             rn += 1
         return body
 
