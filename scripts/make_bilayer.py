@@ -737,10 +737,11 @@ def _classify_atoms(
         c0 = name[0]
         if c0 == "H":
             cat[name] = "H"
-        elif c0 == "P" and not _atype.startswith("C"):
-            # fosforo: nome P* con type NON-carbonio (P, PB, PA, P3/P4/P5 dei
-            # poly-PI: tutti type PC/PL/Px); il vecchio match == "P" lasciava
-            # PB/PA ecc. come "other" -> atomi mai piazzati -> missing degenere
+        elif c0 == "P" and (name == "P" or _atype[0] == "P"):
+            # fosforo: name "P" (type PC) o P* con type P* (PB/PA/P3/P4 dei
+            # bolalipids e poly-PI). REGOLA sbagliata 12/11 ("not type C")
+            # escludeva il P CHARMM che ha proprio atype PC -> i fosfati
+            # finivano "other"/missing e lo spessore misurato collassava
             cat[name] = "P"
         elif c0 == "N":
             cat[name] = "N"
@@ -1123,15 +1124,18 @@ def _lipid_atom_lines(
             coords[name] = (x + 0.03 * missing,
                             y + 0.03 * missing, z_head * 0.5)
 
-    # --- Anti-clash intra-residuo: separazione iterativa ---
+    # --- Anti-clash intra-residuo: mini-relaxazione ---
     # La BFS generica puo' sovrapporre atomi pesanti (es. le due O della
-    # COOH degli acidi grassi, O idrossil adiacenti): frame degenere ->
-    # pdb2gmx costruisce H NaN. Pass: per ogni coppia pesanti NON legate
-    # sotto MIN_HEAVY_DIST li separo lungo la congiungente.
+    # COOH degli acidi grassi, O idrossil adiacenti) e con lipidi complessi
+    # (bolalipids, sfingoidi) puo' anche COMPRIMERE i legami mentre separa
+    # i non-legati. Pass alternato (bug 12/11: singola repulsione comprimeva
+    # i legami fino a 0.5 A): repulsione per i non-legati < 0.9 A, molla
+    # soft per i legati fuori range [0.5, 2.0] A.
     bonded_set = {(a, b) for a, b in residue.get("bonds", [])}
     bonded_set |= {(b, a) for a, b in residue.get("bonds", [])}
     heavy_names = [n for n in coords if not n.startswith("H")]
-    for _round in range(40):
+    bond_names = [p for p in bonded_set if p[0] in coords and p[1] in coords]
+    for _round in range(80):
         moved = False
         for i, a in enumerate(heavy_names):
             for b in heavy_names[i + 1:]:
@@ -1150,6 +1154,20 @@ def _lipid_atom_lines(
                 coords[a] = (ax + push * ux, ay + push * uy, az + push * uz)
                 coords[b] = (bx - push * ux, by - push * uy, bz - push * uz)
                 moved = True
+        # molle: legati super-compressi (< 0.10 nm) o spezzati (> 0.30 nm) —
+        # coordinate in NM: correzione leggera (20% della differenza dal
+        # target 0.15 nm) per non distruggere la conformita' generale
+        for a, b in bond_names:
+            ax, ay, az = coords[a]
+            bx, by, bz = coords[b]
+            dd = math.dist((ax, ay, az), (bx, by, bz))
+            if 0.10 <= dd <= 0.30:
+                continue
+            ux, uy, uz = (ax - bx) / dd, (ay - by) / dd, (az - bz) / dd
+            push = (0.15 - dd) * 0.20
+            coords[a] = (ax + push * ux, ay + push * uy, az + push * uz)
+            coords[b] = (bx - push * ux, by - push * uy, bz - push * uz)
+            moved = True
         if not moved:
             break
 
