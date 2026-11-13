@@ -129,23 +129,27 @@
   });
 
   function mainParams(name, comp) {
+    // colorScheme: per sistemi di soli lipidi uso "resname" (POPC/CHL1 con
+    // colori distinti: il carbonio grigio di default su sfondo scuro era
+    // quasi invisibile); per sistemi con proteine resta "chainname"
+    const scheme = comp && hasProtein() ? "chainname" : "resname";
     // esclusione solvente dinamica: solo resname presenti, con OR esplicito
     // (spazio = AND in NGL: "not (SOL NA CL)" = not(vuoto) = TUTTO — bug toggle)
     const names = comp ? solventResNames(comp.structure) : [];
     const clean = names.length ? `not (${orSele(names)})` : "";
     // cartoon: solo 'protein' (keyword che funziona e già esclude il solvente)
-    if (name === "ball+stick") return clean ? { sele: clean } : {}; // NGL usa il «+», non il tratteggio
-    if (name === "licorice") return clean ? { sele: clean, radius: 0.25 } : { radius: 0.25 };
-    if (name === "line") return clean ? { sele: clean } : {};
+    if (name === "ball+stick") return clean ? { sele: clean, colorScheme: scheme } : { colorScheme: scheme }; // NGL usa il «+», non il tratteggio
+    if (name === "licorice") return clean ? { sele: clean, radius: 0.25, colorScheme: scheme } : { radius: 0.25, colorScheme: scheme };
+    if (name === "line") return clean ? { sele: clean, colorScheme: scheme } : { colorScheme: scheme };
     if (name === "cartoon") return { sele: "protein" };
     if (name === "surface") {
       // superficie molecolare del solo soluto (senza solvente): MSMS pesa
       // sull'acqua, quindi l'esclusione qui è anche una questione di performance
-      const p = { opacity: 0.85, smooth: 3 };
+      const p = { opacity: 0.85, smooth: 3, colorScheme: scheme };
       if (clean) p.sele = clean;
       return p;
     }
-    const p = { radius: "schematic" }; // spacefill (default)
+    const p = { radius: "schematic", colorScheme: scheme }; // spacefill (default)
     if (clean) p.sele = clean;
     return p;
   }

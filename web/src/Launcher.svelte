@@ -205,7 +205,11 @@
               {liveLabel(s.id)}
             </span>
             {#if s.status === 'active'}
-              <span class="ml-auto text-[10px] text-cyan-600">attivo</span>
+              {#if buildProgress.message && buildProgress.current === s.id}
+                <span class="ml-auto text-[10px] text-cyan-700" title={buildProgress.message}>{buildProgress.message}</span>
+              {:else}
+                <span class="ml-auto text-[10px] text-cyan-600">attivo</span>
+              {/if}
             {/if}
             {#if s.status === 'error'}
               <span class="ml-auto text-[10px] text-red-600">{buildProgress.error}</span>

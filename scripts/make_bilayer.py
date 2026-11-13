@@ -1638,7 +1638,7 @@ def generate_pdb(
             # la fase "prepare" e' QUI: senza questo mark il progress resta
             # fermo a "Preparazione struttura" per minuti sui build grandi
             progress.mark(STEP_PREPARE, "active",
-                          f"packing anti-clash tentativo {attempt + 1}/30")
+                          message=f"packing anti-clash tentativo {attempt + 1}/30")
         n_clash = _heavy_clash_count(body)
         if n_clash < best[1]:
             best = (attempt, n_clash)
@@ -1924,12 +1924,24 @@ class ProgressWriter:
         self.started_at = datetime.now(UTC)
         self.current: str | None = None
         self.error: str | None = None
+        self.message: str | None = None
         self._write()
 
-    def mark(self, step_id: str, status: str, error: str | None = None) -> None:
-        """Aggiorna lo status di uno step e riscrive il file."""
+    def mark(
+        self, step_id: str, status: str,
+        error: str | None = None, message: str | None = None,
+    ) -> None:
+        """Aggiorna lo status di uno step e riscrive il file.
+
+        error: testo per status='error'; message: testo informativo per
+        status='active' (BUG 13/11: il terzo argomento unico metteva anche
+        i messaggi di progresso in data['error'] -> badge 'Errore' spurio
+        nella UI a build completato).
+        """
         if error is not None:
             self.error = error
+        if message is not None:
+            self.message = message
         for s in self.steps:
             if s["id"] == step_id:
                 s["status"] = status
@@ -1958,6 +1970,7 @@ class ProgressWriter:
             "elapsed_s": round(elapsed, 1),
             "done": all(s["status"] == "done" for s in self.steps),
             "error": self.error,
+            "message": self.message,
         }
 
     def _write(self) -> None:
