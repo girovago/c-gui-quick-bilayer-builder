@@ -1,13 +1,16 @@
-# C-gui Quick Bilayer Builder — v2.0-alpha
+# C-gui Quick Bilayer Builder — v2.2
 
 Personal laboratory for **drug design / drug discovery**: molecular structure, molecular dynamics (MD) and CADD.
 
-> **AI transparency:** this project was written and reviewed with the assistance of large language models (LLMs) — it is only fair that users know. The code has been verified with unit tests (186 tests) and a scientific audit of the lipid builder, but for production systems (long MD runs, publications) it should always be validated against your own data and simulations.
+![Surface view — region-based hydration](docs/screenshots/1_viewer_surface.png)
+![Stick view — explicit CONECT bonds](docs/screenshots/2_viewer_stick.png)
+
+> **AI transparency:** this project was written and reviewed with the assistance of large language models (LLMs) — it is only fair that users know. The code has been verified with unit tests (197 tests), a geometry sweep over all 411 CHARMM36 lipids and an end-to-end build with measured metrics (see [VALIDATION.md](VALIDATION.md)) — for production systems (long MD runs, publications) it should always be validated against your own data and simulations.
 
 Contains:
 
 - **C-gui Quick Bilayer Builder** (`cgui-studio` on disk) — local web GUI (FastAPI + Svelte 5 + Tailwind + vendored NGL) over the official CHARMM-GUI REST API (Quick Bilayer). Batch construction of lipid compositions with provenance manifests and GROMACS-ready output.
-- **scripts/make_bilayer.py** — local **all-atom molecular builder** (no CHARMM-GUI server needed): builds bilayers, systems with proteins, nucleic acids (DNA/RNA), small molecules and small complexes, and runs GROMACS directly (editconf, solvate, grompp, mdrun). **v2.0: build progress step-by-step with live UI feedback, pdb2gmx fixed for multi-species membranes, Windows 10/11 support.**
+- **scripts/make_bilayer.py** — local **all-atom molecular builder** (no CHARMM-GUI server needed): builds bilayers, systems with proteins, nucleic acids (DNA/RNA), small molecules and small complexes, and runs GROMACS directly (pdb2gmx, editconf, region-based hydration, genion, grompp, mdrun). **v2.2: region-based hydration (no water in the hydrophobic core), explicit CONECT bond records for viewers, geometry guard on every build, live build progress.**
 
 ---
 
@@ -263,8 +266,17 @@ CGUI_MOCK=1 uv run cgui serve --port 8756
 
 ## Tests and verification
 
+![Metrics panel after a build](docs/screenshots/3_metrics_panel.png)
+
+Every build reports measured vs expected metrics (P–P thickness, area per lipid,
+net charge, atom counts). See [VALIDATION.md](VALIDATION.md) for the full
+validation table with reproduction commands.
+
 ```bash
 cd cgui-studio
+
+# Python tests
+uv run pytest -q
 
 # Python tests
 uv run pytest -q
