@@ -532,6 +532,127 @@ def _strip_core_solvent(
     return removed, sol_tot, sol_kept
 
 
+def _add_region_water(
+    boxed_gro: str,
+    hydrated_gro: str,
+    box_x: float,
+    box_y: float,
+    box_z: float,
+    z_center: float,
+    band_half: float,
+    seed: int = 42,
+) -> int:
+    """Aggiunge le molecole d'acqua SOLO nelle regioni d'acqua (stile CHARMM-GUI).
+
+    gmx solvate riempie TUTTO il box (32% dell'acqua finiva nel core
+    idrofobico, 12/11): qui l'acqua viene generata programmaticamente in
+    due bande (sopra e sotto la membrana) su una griglia ~0.31 nm
+    (densita' TIP3P ~33.4 mol/nm^3) con jitter, e scartata se OW dista
+    < 0.24 nm da un atom pesante di lipide (spatial hash O(n)).
+    Geometria TIP3P: r(OW-HW) = 0.09572 nm, angolo 104.52 gradi.
+    Ritorna il numero di molecole aggiunte.
+    """
+    with open(boxed_gro) as f:
+        lines = f.readlines()
+    title, footer = lines[0], lines[-1]
+    # i lipidi (tutto il contenuto ATOM di boxed.gro) restano nel file:
+    # l'acqua viene APPESA dopo, non sostituita
+    base_rows = lines[2:-1]
+
+    # spatial hash dei pesanti dei lipidi (celle 0.4 nm)
+    cell = 0.4
+    grid: dict[tuple[int, int, int], list[tuple[float, float, float]]] = {}
+    for line in lines[2:-1]:
+        name = line[10:15].strip()
+        if name.startswith("H") or line[5:10].strip() in ("NA", "CL", "SOL"):
+            continue
+        xyz = (float(line[20:28]), float(line[28:36]), float(line[36:44]))
+        grid.setdefault(
+            (int(xyz[0] // cell), int(xyz[1] // cell), int(xyz[2] // cell)), []
+        ).append(xyz)
+
+    def _min_dist_to_lipids(x: float, y: float, z: float) -> float:
+        cx, cy, cz = int(x // cell), int(y // cell), int(z // cell)
+        best = 1e9
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for lx, ly, lz in grid.get((cx + dx, cy + dy, cz + dz), ()):
+                        d2 = (x - lx) ** 2 + (y - ly) ** 2 + (z - lz) ** 2
+                        if d2 < best:
+                            best = d2
+        return math.sqrt(best)
+
+    rng = random.Random(seed)
+    step = (1.0 / 33.4) ** (1.0 / 3.0)  # ~0.309 nm
+    r_oh, angle = 0.09572, math.radians(104.52)
+    hh_half = r_oh * math.sin(angle / 2.0)  # semi-distanza HW-HW
+    cos_half = r_oh * math.cos(angle / 2.0)  # proiezione OW-H lungo la bisettrice
+
+    regions = [
+        (0.30, z_center - band_half),
+        (z_center + band_half, box_z - 0.30),
+    ]
+    out_rows: list[str] = []
+    mol_no = 0
+    atom_no = 0
+    for z_lo, z_hi in regions:
+        nx = max(int(box_x / step), 1)
+        ny = max(int(box_y / step), 1)
+        nz = max(int((z_hi - z_lo) / step), 1)
+        for ix in range(nx):
+            for iy in range(ny):
+                for iz in range(nz):
+                    gx = (ix + 0.5) * step + rng.uniform(-0.03, 0.03)
+                    gy = (iy + 0.5) * step + rng.uniform(-0.03, 0.03)
+                    gz = z_lo + (iz + 0.5) * step + rng.uniform(-0.03, 0.03)
+                    if _min_dist_to_lipids(gx, gy, gz) < 0.24:
+                        continue  # collide con i lipidi: scarta
+                    # orientazione random: bisettrice OW->HH unit + perpendicolare
+                    u1, u2 = rng.random(), rng.random()
+                    c1, s1 = math.cos(2 * math.pi * u1), math.sin(2 * math.pi * u1)
+                    c2 = 2.0 * u2 - 1.0
+                    s2 = math.sqrt(max(1.0 - c2 * c2, 0.0))
+                    bx_, by_, bz_ = c1 * s2, s1 * s2, c2
+                    # perpendicolare nel piano HOH: proiezione di (-by, bx, 0)
+                    px_, py_ = -by_, bx_
+                    pl = math.hypot(px_, py_)
+                    if pl < 1e-9:
+                        px_, py_ = 1.0, 0.0
+                    else:
+                        px_, py_ = px_ / pl, py_ / pl
+                    pz_ = 0.0
+                    mol_no += 1
+                    for atom_name, offset in (
+                        ("OW", (0.0, 0.0, 0.0)),
+                        ("HW1", (
+                            bx_ * cos_half + px_ * hh_half,
+                            by_ * cos_half + py_ * hh_half,
+                            bz_ * cos_half + pz_ * hh_half,
+                        )),
+                        ("HW2", (
+                            bx_ * cos_half - px_ * hh_half,
+                            by_ * cos_half - py_ * hh_half,
+                            bz_ * cos_half - pz_ * hh_half,
+                        )),
+                    ):
+                        atom_no += 1
+                        wx = gx + offset[0]
+                        wy = gy + offset[1]
+                        wz = gz + offset[2]
+                        out_rows.append(
+                            f"{mol_no:5d}SOL  {atom_name:<5}{atom_no:5d}"
+                            f"{wx:8.3f}{wy:8.3f}{wz:8.3f}\n"
+                        )
+    with open(hydrated_gro, "w") as f:
+        f.write(title)
+        f.write(f"{len(base_rows) + atom_no:5d}\n")
+        f.writelines(base_rows)
+        f.writelines(out_rows)
+        f.write(footer)
+    return mol_no
+
+
 def _heavy_clash_count(
     body_lines: list[str], thr: float = 0.30
 ) -> int:
@@ -2674,16 +2795,26 @@ def _gmx_pipeline(
         print("AVVISO: minimize senza acqua non supportato, salto mdrun")
         return True
 
+    # --- Acqua a REGIONE (stile CHARMM-GUI), al posto di gmx solvate ---
+    # gmx solvate riempie TUTTO il box (32% dell'acqua nel core idrofobico,
+    # 12/11): qui l'acqua viene generata solo nelle bande sopra/sotto la
+    # membrana con clash-check sui lipidi.
     solvated_gro = str((system_dir / "solvated.gro").resolve())
     _mark(STEP_SOLVATE, "active")
-    r = _gmx(["solvate", "-cp", boxed_gro, "-cs", "spc216.gro",
-              "-o", solvated_gro, "-p", top_abs])
-    if r.returncode != 0:
-        _mark(STEP_SOLVATE, "error", "solvate fallito")
-        print(f"AVVISO: gmx solvate fallito: {r.stderr[-500:]}", file=sys.stderr)
+    thickness_db = bilayer_thickness(upper, lower)
+    band_half = max(thickness_db / 2 - 0.2, 0.5)
+    n_water = _add_region_water(
+        boxed_gro, solvated_gro, box_x, box_y, box_z, box_z / 2.0, band_half
+    )
+    if n_water == 0:
+        _mark(STEP_SOLVATE, "error", "generazione acqua: 0 molecole")
+        print("AVVISO: generazione acqua non ha piazzato molecole", file=sys.stderr)
         return False
+    # il top dichiara SOL/NA/CL: _ensure_top_molecules riconta dal .gro
+    _ensure_top_molecules(Path(top_abs), solvated_gro, upper, lower)
     _mark(STEP_SOLVATE, "done")
-    print("gmx solvate: OK")
+    print(f"acqua generata a regione: {n_water} molecole (banda |z| < "
+          f"{band_half:.2f} nm, core idrofobico VUOTO)")
     _rename_lipid_moleculetypes(top_abs, chain_map, system_dir=system_dir)
 
     # --- Ioni: grompp preliminare → genion (neutralizza + conc) ---
@@ -2691,7 +2822,9 @@ def _gmx_pipeline(
     r = _gmx(["grompp", "-maxwarn", "10", "-f", mdp_path, "-c", solvated_gro,
               "-p", top_abs, "-o", tpr_ion])
     if r.returncode != 0:
-        print(f"AVVISO: gmx grompp (pre-ioni) fallito: {r.stderr[-500:]}", file=sys.stderr)
+        print(f"AVVISO: gmx grompp (pre-ioni) fallito:\n"
+              f"--- stderr ---\n{r.stderr[-800:]}\n"
+              f"--- stdout (coda) ---\n{r.stdout[-800:]}", file=sys.stderr)
         return False
 
     n_cat, n_an, net = ion_counts(upper, lower, box_x, box_y, box_z, ion_conc,

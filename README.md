@@ -153,7 +153,7 @@ python3 scripts/make_bilayer.py --upper "POPC=14;POPE=6;PSM=8;CHOL=20;POPS=4;POP
 | `system/topol.top` | GROMACS topology (CHARMM36) with position restraints on polar heads |
 | `system/minim.mdp` | Energy minimization parameters (steepest descent) |
 | `system/boxed.gro` | Structure with box (after `gmx editconf`) |
-| `system/solvated.gro` | Solvated system (after `gmx solvate`) |
+| `system/solvated.gro` | Hydrated system (water generated **only in the water regions**, geometric exclusion of the hydrophobic core) |
 | `system/ionized.gro` | System with ions added (after `gmx genion`) |
 | `system/minim.tpr` | Input ready for simulation (after `gmx grompp`) |
 | `system/minim.trr/.gro/.edr/.log` | Minimization output (after `gmx mdrun`) |
@@ -168,11 +168,17 @@ When `--run-gmx` is specified, the script automatically executes:
 
 1. `gmx pdb2gmx -ff charmm36 -water tip3p -ignh` — generates the full topology (`[bonds]`, `[angles]`, `[dihedrals]`, `[cmap]`) from PDB + charmm36 jul2022 (if it fails, proceeds with partial topology and warning banner)
 2. `gmx editconf` — centers and sets box
-3. `gmx solvate` — adds TIP3P water
+3. **Region-based hydration** — water generated only in the water regions above/below the membrane (geometric exclusion of the hydrophobic core; TIP3P geometry, ~33.4 molecules/nm³, clash-checked against lipids). Every ATOM carries explicit CONECT records from the CHARMM36 rtp bonds, so molecular viewers show intra-lipid bonds only
 4. `gmx grompp` (pre-ions) — prepares input for genion
 5. `gmx genion` — adds ions (neutralization + concentration)
-6. `gmx grompp` — prepares minimization input
-7. `gmx mdrun` — runs energy minimization
+6. geometry guard: NaN/clash checks on intermediate files before continuing
+7. `gmx grompp` — prepares minimization input
+8. `gmx mdrun` — runs energy minimization
+
+**Validation**: `VALIDATION.md` documents measured-vs-expected metrics (P–P
+thickness, APL, ion counts, water-in-core fraction) with reproduction
+commands, plus the automated geometry sweep over all 411 CHARMM36 lipid
+residues (CI regression test).
 
 ### GROMACS version detection
 
