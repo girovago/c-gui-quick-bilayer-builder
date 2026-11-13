@@ -41,9 +41,9 @@ Risultato atteso/misurato (aggiornato a ogni release):
 
 | Metrica | Valore |
 |---|---|
-| atomi totali | ~40k |
-| spessore P-P misurato | 4.02 nm (atteso per composizione: 4.02) |
-| SOL generate | 5232 (region-based hydration: solo sopra/sotto la membrana) |
+| atomi totali | 24966 |
+| spessore P-P misurato | 4.006 nm (atteso: 4.021) |
+| SOL generate | 15618 (region-based hydration: solo sopra/sotto la membrana) |
 | SOL nel core idrofobico | **0** (verificato sul .gro ionizzato) |
 | ioni (NaCl 0.15 M + neutralizzazione) | 34 Na⁺ / 34 Cl⁻, 0 ioni nel core |
 | CONECT records nel PDB | 9216 (bond CHARMM36 rtp espliciti: i viewer non inferiscono legami inter-lipide) |
